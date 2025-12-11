@@ -178,28 +178,28 @@ namespace DeLI {
      */
     template<typename T>
     class RHT_wrapper {
-        rht<T> * rht;
+        rht<T> * t;
     public:
         RHT_wrapper(const size_t sz) {
-            rht = ::DeLI::rht<T>::allocate_rht(sz);
+            t = ::DeLI::rht<T>::allocate_rht(sz);
         }
         ~RHT_wrapper() {
-            delete[] reinterpret_cast<char *>(rht);
+            delete[] reinterpret_cast<char *>(t);
         }
         void insert(T key) {
-            rht->insert(key);
+            t->insert(key);
         }
         void remove(T key) {
-            rht->remove(key);
+            t->remove(key);
         }
         bool contains(T key) const {
-            return rht->contains(key);
+            return t->contains(key);
         }
         T find_next(T key) const {
-            return rht->find_next(key);
+            return t->find_next(key);
         }
         T find_prev(T key) const {
-            return rht->find_prev(key);
+            return t->find_prev(key);
         }
     };
 }
