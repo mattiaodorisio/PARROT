@@ -5,7 +5,7 @@
 int main() {
     std::cout << "Running RHT Test" << std::endl;
     
-    test_index<DeLI::RHT_wrapper<int>>(1024 * 1024);
+    test_index<DeLI::RHT<int>>(1 << 26, std::numeric_limits<int>::max());
 
     std::cout << "Test RHT passed!" << std::endl;
     return 0;

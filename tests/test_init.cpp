@@ -7,7 +7,7 @@ int main() {
     std::cout << "Running DeLI Test 1" << std::endl;
     
     // Basic test - just ensure the library can be included and used
-    DeLI::DeLI<int, 10> d;
+    DeLI::DeLI<int, 20> d;
 
     d.insert(42);
     
