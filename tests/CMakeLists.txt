@@ -5,6 +5,7 @@ set(TEST_SOURCES
     test_veb.cpp
     test_rht.cpp
     test_conversion.cpp
+    test_deli.cpp
 )
 
 foreach(TEST_SOURCE IN LISTS TEST_SOURCES)

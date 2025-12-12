@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   veb_tree veb_index;
   bench_insert(veb_index, "VEB Insert", keys, queries);
 
-  DeLI::RHT<int> rht_index(100000, std::numeric_limits<int>::max());
+  DeLI::RHT<int> rht_index(100000, 0, std::numeric_limits<int>::max());
   bench_insert(rht_index, "RHT Insert", keys, queries);
 
   benchmark::Initialize(&argc, argv);
