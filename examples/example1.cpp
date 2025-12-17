@@ -3,7 +3,7 @@
 #include "deli.h"
 
 int main() {
-    std::cout << "Example TODO" << std::endl;
+  std::cout << "Example TODO" << std::endl;
 
-    return 0;
+  return 0;
 }
