@@ -23,7 +23,7 @@ void bench_insert(Index &index, const char * index_name, std::vector<int> & keys
     state.counters["used_keys"] = i;
     state.counters["available_keys"] = NUM_KEYS;
   };
-  benchmark::RegisterBenchmark(index_name, bench_func)->Iterations(10000);
+  benchmark::RegisterBenchmark(index_name, bench_func);
 }
 
 int main(int argc, char** argv) {
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   veb_tree veb_index;
   bench_insert(veb_index, "VEB Insert", keys, queries);
 
-  DeLI::RHT<int> rht_index(100000, 0, std::numeric_limits<int>::max());
+  DeLI::RHT<int> rht_index(0, std::numeric_limits<int>::max());
   bench_insert(rht_index, "RHT Insert", keys, queries);
 
   benchmark::Initialize(&argc, argv);

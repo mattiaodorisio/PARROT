@@ -29,35 +29,31 @@ namespace DeLI {
                 T high = ((*it) >> low_bits);
                 if (high != current_high) {
                     // Bulk load the current bucket
-                    std::get<RHT<T>>(top_level[current_high]).bulk_load(bucket_start, it, current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
+                    top_level[current_high].bulk_load(bucket_start, it, current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
                     bucket_start = it;
                     current_high = high;
                 }
             }
             // Bulk load the last bucket
-            std::get<RHT<T>>(top_level[current_high]).bulk_load(bucket_start, end, current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
+            top_level[current_high].bulk_load(bucket_start, end, current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
         }
 
         void insert(T key) {
             T high = (key >> low_bits);
-            if (!std::holds_alternative<RHT<T>>(top_level[high])) {
-                std::get<veb_tree>(top_level[high]).insert(key);
-            } else {
-                if (std::get<RHT<T>>(top_level[high]).is_initialized() == false) {
-                    std::get<RHT<T>>(top_level[high]).init(high << low_bits, high << low_bits | ((1 << low_bits) - 1));
-                }
-                std::get<RHT<T>>(top_level[high]).insert(key);
+            if (top_level[high].is_initialized() == false) {
+                top_level[high].init(high << low_bits, high << low_bits | ((1 << low_bits) - 1));
             }
+            top_level[high].insert(key);
         }
 
         void remove(T key) {
             T high = (key >> low_bits);
-            std::get<RHT<T>>(top_level[high]).remove(key);
+            top_level[high].remove(key);
         }
 
         bool contains(T key) const {
             T high = (key >> low_bits);
-            return std::get<RHT<T>>(top_level[high]).contains(key);
+            return top_level[high].contains(key);
         }
 
         /**
@@ -66,14 +62,10 @@ namespace DeLI {
          */
         T find_next(T key) const {
             T high = (key >> low_bits);
-            T res = std::get<RHT<T>>(top_level[high]).find_next(key);
+            T res = top_level[high].find_next(key);
             while (res == -1 && ++high < (1 << high_bits)) {
-                if (auto& node = top_level[high]; std::holds_alternative<RHT<T>>(node)) {
-                    if (std::get<RHT<T>>(node).is_initialized())
-                        res = std::get<RHT<T>>(node).min();
-                } else {
-                    res = std::get<veb_tree>(node).min();
-                }
+                if (top_level[high].is_initialized())
+                    res = top_level[high].min();
             }
             return res;
         }
@@ -84,19 +76,24 @@ namespace DeLI {
          */
         T find_prev(T key) const {
             T high = (key >> low_bits);
-            T res = std::get<RHT<T>>(top_level[high]).find_prev(key);
+            T res = top_level[high].find_prev(key);
             while (res == -1 && --high > 0) {
-                if (auto& node = top_level[high]; std::holds_alternative<RHT<T>>(node)) {
-                    if (std::get<RHT<T>>(node).is_initialized())
-                        res = std::get<RHT<T>>(node).max();
-                } else {
-                    res = std::get<veb_tree>(node).max();
-                }
+                if (top_level[high].is_initialized())
+                    res = top_level[high].max();
             }
             return res;
         }
 
+        T min() const {
+          for (const auto& rht : top_level) {
+            if (rht.is_initialized()) {
+                return rht.min();
+            }
+          }
+          return -1;
+        }
+
     private:
-        std::vector<std::variant<RHT<T>, veb_tree>> top_level;
+        std::vector<RHT<T>> top_level;
     };
 }

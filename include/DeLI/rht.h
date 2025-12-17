@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iterator>
+#include <cstdint>
 
 namespace DeLI {
     
@@ -16,15 +17,21 @@ namespace DeLI {
         using sz_t = size_t; // TODO check, a smaller type should be feasible for us
 
         std::vector<T> table;
+        sz_t table_size = 0; // This does not include the extra space for overflowing elements
         sz_t range_min, range_max; // TODO - we possibly don't need both
         sz_t sum_displacement = 0;
         sz_t max_displacement = 0;
         sz_t num_elements = 0;
+        uint8_t extension_factor = 1; // Factor by which the table is extended to accomodate for growing displacement at the end of the table
+        sz_t max_probe = 0;
 
         // Table parameters
-        constexpr static sz_t th_max_displacement = 16; // TODO tune this parameter
-        constexpr static sz_t th_avg_displacement = 8; // TODO tune this parameter
-        constexpr static sz_t oversize_factor = 2; // TODO tune this parameter
+        constexpr static sz_t th_max_displacement = 16;     // TODO tune this parameter
+        constexpr static sz_t th_avg_displacement = 8;      // TODO tune this parameter
+        constexpr static float th_load_factor_min = 0.4;    // TODO tune this parameter
+        constexpr static float th_load_factor_target = 0.5; // TODO tune this parameter
+        constexpr static float th_load_factor_max = 0.6;    // TODO tune this parameter
+        constexpr static sz_t table_min_size = 16;          // TODO tune this parameter
 
         // Sentinel values for empty slots
         constexpr static T empty_v = std::numeric_limits<T>::max();
@@ -36,16 +43,17 @@ namespace DeLI {
         sz_t scale(T key) const {
             // TODO: we can speedup the multiplication by using shifts if the range is a power of two
             // TODO: we can speedup the division by using multiplications by precomputed (see Lemire's fastmod)
+            // TODO: we can sppedup the division even more if the range is a power of two
             // return static_cast<sz_t>(((key) * (table.size() - 1)) / universe_size);
-            return static_cast<sz_t>((1. * (key) * (table.size() - 1 - th_max_displacement)) / (range_max - range_min));
+            return static_cast<sz_t>((1. * key * table_size) / (range_max - range_min));
         }
 
     public:
 
         RHT() {};
 
-        RHT(sz_t expected_size, sz_t range_min, sz_t range_max) {
-            init(expected_size, range_min, range_max);
+        RHT(sz_t range_min, sz_t range_max, sz_t expected_size = th_max_displacement) {
+            init(range_min, range_max, expected_size);
         }
 
         void init() {
@@ -55,7 +63,8 @@ namespace DeLI {
         void init(sz_t range_min, sz_t range_max, sz_t expected_size = th_max_displacement) {
             this->range_min = range_min;
             this->range_max = range_max;
-            table.resize(oversize_factor * expected_size + th_max_displacement, empty_v);
+            table_size = table_min_size;
+            table.resize(th_load_factor_target * expected_size + th_max_displacement, empty_v);
         }
 
         template <typename It>
@@ -64,7 +73,11 @@ namespace DeLI {
             sz_t n = std::distance(begin, end);
             this->range_min = range_min;
             this->range_max = range_max;
-            table.resize(oversize_factor * n + th_max_displacement, empty_v);
+            table_size = next_power_of_two(static_cast<sz_t>(n / th_load_factor_target));
+            if (table_size * th_load_factor_max < n) {
+                table_size >>= 1;
+            }
+            table.resize(table_size + th_max_displacement, empty_v);
 
             if (std::is_sorted(begin, end) == false) {
                 for (It it = begin; it != end; ++it) {
@@ -81,7 +94,7 @@ namespace DeLI {
                         probe_index = probe;
                     }
                     sum_displacement += probe_index - probe;
-                    max_displacement = std::max(max_displacement, probe_index - probe);
+                    // max_displacement = std::max(max_displacement, probe_index - probe);
                     table[probe_index++] = key;
                 }
             }
@@ -96,37 +109,66 @@ namespace DeLI {
             return true;
         }
 
-        void insert(T key) {
-            key -= range_min;
-            sz_t probe = scale(key);
-            if (probe > table.size() || probe < 0) [[unlikely]] throw std::runtime_error("Key out of range in insert");
-            if constexpr (search_strategy == binary_search) {
-                throw std::runtime_error("Not implemented");
-            } else if constexpr (search_strategy == linear_search) {
-                // TODO: this is naive (temporary implementation)
-                while (table[probe] != empty_v && table[probe] < key && probe < table.size()) {
-                    ++probe;
-                    ++sum_displacement;
-                }
-                while (table[probe] != empty_v && probe < table.size()) {
-                    std::swap(key, table[probe]);
-                    ++probe;
-                    ++sum_displacement;
-                }
+        static constexpr sz_t next_power_of_two(sz_t n) {
+          --n;
+          n |= n >> 1;
+          n |= n >> 2;
+          n |= n >> 4;
+          n |= n >> 8;
+          n |= n >> 16;
+          if constexpr (sizeof(sz_t) == 8) {
+              n |= n >> 32;
+          }
+          ++n;
+          return n;
+        }
 
-                if (probe >= table.size()) [[unlikely]] { // TODO improve implementation
-                    std::vector<T> old_data;
-                    old_data.reserve(num_elements + 1);
-                    std::copy(begin(), end(), std::back_inserter(old_data));
-                    auto new_key = std::upper_bound(old_data.begin(), old_data.end(), key + range_min);
-                    old_data.insert(new_key, key + range_min);
-                    assert(std::is_sorted(old_data.begin(), old_data.end()));
-                    bulk_load(old_data.begin(), old_data.end(), range_min, range_max);
-                } else {
-                    table[probe] = key;
-                    ++num_elements;
-                }
+        void ensure_scaling(sz_t new_num_elements) {
+          float load_factor = static_cast<float>(new_num_elements) / table_size;
+          if (load_factor > th_load_factor_max || (load_factor < th_load_factor_min && table_size > table_min_size)) {
+            sz_t old_table_size = table_size;
+            table_size = next_power_of_two(static_cast<sz_t>(new_num_elements / th_load_factor_target)); // TODO simplify this: sometimes doubling the size we go below the min load factor
+            if (table_size * th_load_factor_max < new_num_elements) {
+                table_size >>= 1;
             }
+            if (old_table_size == table_size) { // TODO simplify this: sometimes doubling the size we go below the min load factor
+                return;
+            }
+            std::vector<T> old_data;
+            old_data.reserve(num_elements);
+            std::copy(begin(), end(), std::back_inserter(old_data));
+            clear();
+            table.resize(table_size + th_max_displacement * extension_factor, empty_v);
+            bulk_load(old_data.begin(), old_data.end(), range_min, range_max);
+          }
+        }
+
+        void insert(T key) {
+          key -= range_min;
+          ensure_scaling(num_elements + 1);
+          sz_t probe = scale(key);
+          sz_t initial_probe = probe;
+          if constexpr (search_strategy == binary_search) {
+            throw std::runtime_error("Not implemented");
+          } else if constexpr (search_strategy == linear_search) {
+            // TODO: this is naive (temporary implementation)
+            while (table[probe] != empty_v && table[probe] < key && probe < table.size()) {
+              ++probe;
+              ++sum_displacement;
+            }
+            while (table[probe] != empty_v && probe < table.size()) {
+              std::swap(key, table[probe]);
+              ++probe;
+              ++sum_displacement;
+            }
+            if (probe == table.size()) {
+              table.resize(table.size() + th_max_displacement * extension_factor, empty_v);
+              extension_factor = std::min<uint8_t>(extension_factor + 1, 16);
+            }
+            max_probe = std::max(max_probe, probe - initial_probe);
+            table[probe] = key;
+            ++num_elements;
+          }
         }
 
         void remove(T key) {
@@ -151,6 +193,7 @@ namespace DeLI {
                 table[probe] = empty_v;
                 --num_elements;
             }
+            ensure_scaling(num_elements);
         }
 
         void clear() {
@@ -159,8 +202,8 @@ namespace DeLI {
             }
             sum_displacement = 0;
             max_displacement = 0;
-            range_min = range_max = 0;
             num_elements = 0;
+            extension_factor = 1;
         }
 
         void free_memory() {

@@ -5,7 +5,7 @@
 int main() {
     std::cout << "Running RHT Test" << std::endl;
     
-    test_index<DeLI::RHT<int>>(1 << 20, 0, 1 << 17);
+    test_index<DeLI::RHT<int>>(0, 1 << 17, 1 << 20);
 
     // Test bulk loading
     {
