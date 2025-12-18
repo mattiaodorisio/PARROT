@@ -19,7 +19,8 @@ namespace vEB_tree_impl {
 	template <int LOG, class D = void>
 	struct vEB_tree_node {
 		using Chd = vEB_tree_node<(LOG >> 1)>;
-		
+		using value_type = int; // TODO: Make this templated
+
 		Chd map;
 		int mn, mx;
 		static constexpr int shift = (LOG >> 1) * lgW;

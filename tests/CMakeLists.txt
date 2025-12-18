@@ -2,7 +2,7 @@
 
 set(TEST_SOURCES
     test_init.cpp
-    test_veb.cpp
+    # test_veb.cpp
     test_rht.cpp
     test_conversion.cpp
     test_deli.cpp

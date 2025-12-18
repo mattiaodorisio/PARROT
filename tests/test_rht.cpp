@@ -5,7 +5,7 @@
 int main() {
   std::cout << "Running RHT Test" << std::endl;
   
-  test_index<DeLI::RHT<int>>(0, 1 << 17, 1 << 20);
+  test_index<DeLI::RHT<int>>(0, 1 << 17);
   
   // Test bulk loading
   {
@@ -17,8 +17,8 @@ int main() {
     }
     check(!std::is_sorted(data.begin(), data.end()));
     
-    DeLI::RHT<int> rht;
-    bool loaded = rht.bulk_load(data.begin(), data.end(), 0, 1 << 17);
+    DeLI::RHT<int> rht(0, 1 << 17);
+    bool loaded = rht.bulk_load(data.begin(), data.end());
     if (!loaded) {
       std::cerr << "Bulk load failed due to high displacement." << std::endl;
       return 1;
@@ -27,8 +27,8 @@ int main() {
     // Test the sorted version
     std::sort(data.begin(), data.end());
     
-    DeLI::RHT<int> rht_sorted;
-    loaded = rht_sorted.bulk_load(data.begin(), data.end(), 0, 1 << 17);
+    DeLI::RHT<int> rht_sorted(0, 1 << 17);
+    loaded = rht_sorted.bulk_load(data.begin(), data.end());
     if (!loaded) {
       std::cerr << "Bulk load of sorted data failed due to high displacement." << std::endl;
       return 1;

@@ -91,8 +91,8 @@ void test_index(Args&&... args) {
       v.remove(val);
       model.erase(val);
     }
-    
-    // After erasures, verify containss and non-containss
+
+    // After erasures, verify contains and non-contains
     for (int i = 0; i < remove_count; ++i) {
       int removed = elems[i];
       check(!v.contains(removed));
@@ -123,4 +123,33 @@ void test_index(Args&&... args) {
       check(!v.contains(val));
     }
   }
+
+#if false
+  // Test benchmark-like
+  {
+    Index v(std::forward<Args>(args)...);
+    
+    const size_t NUM_KEYS = 1 << 20;
+    const size_t NUM_QUERIES = 1 << 20;
+    std::vector<int> keys(NUM_KEYS), queries(NUM_QUERIES);
+    for (size_t i = 0; i < NUM_KEYS; ++i) {
+      keys[i] = i * 2654435761 % NUM_KEYS;
+    }
+    for (size_t i = 0; i < NUM_QUERIES; ++i) {
+      queries[i] = i * 40503 % NUM_QUERIES;
+    }
+    
+    std::sort(keys.begin(), keys.end());
+    // for (size_t i = 0; i < NUM_KEYS; ++i) {
+    //   v.insert(keys[i]);
+    // }
+    v.bulk_load(keys.begin(), keys.end());
+
+    for (size_t i = 0; i < NUM_QUERIES; ++i) {
+      auto result = v.find_next(queries[i]);
+      auto lb = std::lower_bound(keys.begin(), keys.end(), queries[i]);
+      check(result == (lb == keys.end() ? -1 : *lb));
+    }
+  }
+#endif
 }

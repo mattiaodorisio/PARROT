@@ -12,10 +12,13 @@ namespace DeLI {
   
   template <typename T>
   class RHT {
+  public:
     enum search_type { binary_search, linear_search };
     enum direction { predecessor, successor }; // Optimize predecessor or successor search by changing the probing direction, TODO to be implemented
     using sz_t = size_t; // TODO check, a smaller type should be feasible for us
+    using value_type = T;
     
+  private:
     std::vector<T> table;
     sz_t table_size = 0; // This does not include the extra space for overflowing elements
     sz_t range_min, range_max; // TODO - we possibly don't need both
@@ -47,9 +50,8 @@ namespace DeLI {
       // return static_cast<sz_t>(((key) * (table.size() - 1)) / universe_size);
       return static_cast<sz_t>((1. * key * table_size) / (range_max - range_min));
     }
-    
-    public:
-    
+
+  public:
     RHT() {};
     
     RHT(sz_t range_min, sz_t range_max, sz_t expected_size = th_max_displacement) {
@@ -68,11 +70,9 @@ namespace DeLI {
     }
     
     template <typename It>
-    bool bulk_load(It begin, It end, sz_t range_min, sz_t range_max) {
+    bool bulk_load(It begin, It end) {
       clear();
       sz_t n = std::distance(begin, end);
-      this->range_min = range_min;
-      this->range_max = range_max;
       table_size = next_power_of_two(static_cast<sz_t>(n / th_load_factor_target));
       if (table_size * th_load_factor_max < n) {
         table_size >>= 1;
@@ -139,7 +139,7 @@ namespace DeLI {
         std::copy(begin(), end(), std::back_inserter(old_data));
         clear();
         table.resize(table_size + th_max_displacement * extension_factor, empty_v);
-        bulk_load(old_data.begin(), old_data.end(), range_min, range_max);
+        bulk_load(old_data.begin(), old_data.end());
       }
     }
     
@@ -252,10 +252,15 @@ namespace DeLI {
       return find_prev(range_max);
     }
     
+    size_t size() const {
+      return num_elements;
+    }
+    
     /**
     * Find successor
     * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
     */
+   // TODO: return an iterator?
     T find_next(T key) const {
       key -= range_min;
       sz_t probe = scale(key);
@@ -381,11 +386,11 @@ namespace DeLI {
     };
     
     iterator<T> begin() const {
-      return iterator(0, *this);
+      return iterator<T>(0, *this);
     }
     
     iterator<T> end() const {
-      return iterator(table.size(), *this);
+      return iterator<T>(table.size(), *this);
     }
   };
 }

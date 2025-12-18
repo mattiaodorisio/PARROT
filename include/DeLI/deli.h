@@ -11,7 +11,8 @@ namespace DeLI {
 	
 	template<typename T, unsigned int low_bits>
 	class DeLI {
-		public:
+	public:
+		using value_type = T;
 		static constexpr int high_bits = sizeof(T) * CHAR_BIT - low_bits;
 		
 		DeLI() {
@@ -29,13 +30,15 @@ namespace DeLI {
 				T high = ((*it) >> low_bits);
 				if (high != current_high) {
 					// Bulk load the current bucket
-					top_level[current_high].bulk_load(bucket_start, it, current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
+					top_level[current_high].init(current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
+					top_level[current_high].bulk_load(bucket_start, it);
 					bucket_start = it;
 					current_high = high;
 				}
 			}
 			// Bulk load the last bucket
-			top_level[current_high].bulk_load(bucket_start, end, current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
+			top_level[current_high].init(current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
+			top_level[current_high].bulk_load(bucket_start, end);
 		}
 		
 		void insert(T key) {
@@ -55,6 +58,20 @@ namespace DeLI {
 			T high = (key >> low_bits);
 			return top_level[high].contains(key);
 		}
+
+		void clear() {
+			for (auto& rht : top_level) {
+				rht.clear();
+			}
+		}
+
+		size_t size() const {
+			size_t total_size = 0;
+			for (const auto& rht : top_level) {
+				total_size += rht.size();
+			}
+			return total_size;
+		}
 		
 		/**
 		* Find successor
@@ -62,7 +79,10 @@ namespace DeLI {
 		*/
 		T find_next(T key) const {
 			T high = (key >> low_bits);
-			T res = top_level[high].find_next(key);
+			T res = -1;
+			if (top_level[high].is_initialized()) {
+				res = top_level[high].find_next(key);
+			}
 			while (res == -1 && ++high < (1 << high_bits)) {
 				if (top_level[high].is_initialized())
 				res = top_level[high].min();
@@ -76,10 +96,12 @@ namespace DeLI {
 		*/
 		T find_prev(T key) const {
 			T high = (key >> low_bits);
-			T res = top_level[high].find_prev(key);
-			while (res == -1 && --high > 0) {
+			T res = -1;
+			if (top_level[high].is_initialized())
+				res = top_level[high].find_prev(key);
+			while (res == -1 && --high >= 0) {
 				if (top_level[high].is_initialized())
-				res = top_level[high].max();
+					res = top_level[high].max();
 			}
 			return res;
 		}
