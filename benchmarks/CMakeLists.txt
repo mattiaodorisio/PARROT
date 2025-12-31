@@ -4,6 +4,10 @@
 add_executable(bench_tiny bench_tiny.cpp)
 target_link_libraries(bench_tiny PRIVATE DeLI)
 
+# Bench RTH
+add_executable(bench_rth bench_rth.cpp)
+target_link_libraries(bench_rth PRIVATE DeLI)
+
 include(FetchContent)
 
 # Download and make Google Benchmark available automatically
