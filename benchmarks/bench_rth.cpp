@@ -21,44 +21,50 @@ static uint64_t XXH64_avalanche(uint64_t hash)
     hash ^= hash >> 32;
     return hash;
 }
+
+static uint32_t skewwed(uint64_t hash) {
+    uint64_t v=XXH64_avalanche(hash);
+    return v>>32;
+}
+
 int main(int argc, char** argv) {
-    size_t n=(1<<20)-(1<<18);
+    size_t n=(1<<21)-(1<<17);
     typedef uint32_t T;
     std::vector<T> values;
     values.resize(n);
     for (std::uint64_t i = 0; i < n; ++i) {
-        values[i]= T(XXH64_avalanche((i+1)));
+        values[i]= skewwed(i+1);
     }
 
-    DeLI::RHT<T> rht(1<<20, 32 - 20, values);
+    DeLI::RHT<T> rht(1<<24, 64 - 24, values);
 
-    std::cout<<"starting validation"<<std::endl;
+    if(true) {
+        std::cout << "starting validation" << std::endl;
 
-    std::set<T> validate(values.begin(), values.end());
-    std::uint64_t val_iterations = n<<1;
+        std::set<T> validate(values.begin(), values.end());
+        std::uint64_t val_iterations = n << 1;
 
-    for (std::uint64_t i = 1; i < val_iterations+1; ++i) {
-        T key = T(XXH64_avalanche(i));
-        auto res = rht.find_next(key);
-        auto val = validate.upper_bound(key);
-        if(res.has_value() != (val!=validate.end())) {
-            //exit(1);
-        }
-        if(res.has_value() && (res.value() !=*val)) {
-            //exit(1);
+        for (std::uint64_t i = 1; i < val_iterations + 1; ++i) {
+            T key = skewwed(i);
+            auto res = rht.find_next(key);
+            auto val = validate.upper_bound(key);
+            if (res!=DeLI::RHT<T>::empty_v != (val != validate.end())) {
+                exit(1);
+            }
+            if (res!=DeLI::RHT<T>::empty_v && (res != *val)) {
+                exit(1);
+            }
         }
     }
-
     std::cout<<"starting query"<<std::endl;
 
-    std::uint64_t iterations = 1<<29;
+    std::uint64_t iterations = 1<<24;
     using clock = std::chrono::steady_clock;
 
     uint64_t sum=0;
     auto start = clock::now();
     for (std::uint64_t i = 1; i < iterations+1; ++i) {
-        auto res = rht.find_next(XXH64_avalanche(i));
-        sum+=res.value_or(1);
+        sum+= rht.find_next(skewwed(i));
     }
     auto end = clock::now();
 

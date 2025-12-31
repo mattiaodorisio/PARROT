@@ -8,8 +8,54 @@
 #include <iterator>
 #include <cstdint>
 #include <experimental/simd>
+#include <vector>
+#include <cstdint>
+#include <limits>
 
 namespace DeLI {
+
+    struct BitVector {
+        std::vector<uint64_t> bits;
+        static constexpr int W = 64;
+
+        void resize(size_t n_bits) {
+            bits.resize(n_bits / W + 1);
+            set(n_bits);
+        }
+
+        uint64_t get(size_t i) const {
+            return bits[i / W] & (uint64_t(1) << (i % W));
+        }
+
+
+        void set(size_t i) {
+            bits[i / W] |= (uint64_t(1) << (i % W));
+        }
+
+        void clear(size_t i) {
+            bits[i / W] &= ~(uint64_t(1) << (i % W));
+        }
+
+        size_t next_set(size_t pos) const {
+            size_t w = pos / W;
+            uint64_t word = bits[w];
+
+            word &= (~uint64_t(0)) << (pos % W);
+
+            uint64_t word2=bits[w+1];
+
+            if ((word | word2) != 0) [[likely]]{
+                return word!=0?w * W + __builtin_ctzll(word):(w+1) * W + __builtin_ctzll(word2);
+            }
+            w+=2;
+            while (true) {
+                if (bits[w] != 0)
+                    return w * W + __builtin_ctzll(bits[w]);
+                w++;
+            }
+        }
+    };
+
     namespace stdx = std::experimental;
 
     template<typename T>
@@ -17,13 +63,14 @@ namespace DeLI {
     public:
         using sz_t = T;
 
+        constexpr static T empty_v = std::numeric_limits<T>::min();
     private:
         using simd_t = stdx::native_simd<T>;
         constexpr static sz_t block_size = simd_t::size();
         std::vector<simd_t> table;
+        BitVector non_empty_slots;
 
         // Sentinel values for empty slots
-        constexpr static T empty_v = std::numeric_limits<T>::min();
         constexpr static sz_t unrolled_blocks = 5;
         constexpr static float cluster_safety_factor = 1.1;
 
@@ -35,22 +82,16 @@ namespace DeLI {
             assert(key_shift < sizeof(T) * 8);
             sz_t regular_blocks = 1 + float(slots) * cluster_safety_factor / float(block_size);
             table.resize(regular_blocks + unrolled_blocks, simd_t(empty_v));
+            non_empty_slots.resize(table.size() * block_size - 1);
 
             std::sort(keys.begin(), keys.end());
-            sz_t current_block = 0;
-            sz_t in_block = 0;
+            sz_t nextFreeSlot = 0;
             for (T k: keys) {
                 sz_t slot = get_slot(k);
-                if(slot/block_size > current_block) {
-                    in_block=0;
-                    current_block = slot/block_size;
-                }
-                table[current_block][in_block] = k;
-                in_block++;
-                if(in_block==block_size) {
-                    in_block=0;
-                    current_block++;
-                }
+                slot = std::max(nextFreeSlot, slot);
+                table[slot / block_size][slot % block_size] = k;
+                non_empty_slots.set(slot);
+                nextFreeSlot = slot + 1;
             }
         }
 
@@ -58,7 +99,7 @@ namespace DeLI {
             return key >> key_shift;
         }
 
-        std::optional<T> find_next(T key) const {
+        T find_next(T key) const {
             assert(key != empty_v);
 
             /*sz_t probe = get_slot(key);
@@ -73,21 +114,26 @@ namespace DeLI {
                 }
             }
             return std::optional<T>();*/
-
-
-            sz_t probe = get_slot(key) / block_size;
-            assert(probe < table.size() - unrolled_blocks);
-            do {
-                simd_t chunk1 = table[probe++] - (key + 1);
-                simd_t chunk2 = table[probe++] - (key + 1);
-                simd_t chunk3 = table[probe++] - (key + 1);
-                simd_t chunk = stdx::min(chunk3, stdx::min(chunk2, chunk1));
-                T min_val = stdx::hmin(chunk) + (key + 1);
-                if (min_val > key) [[likely]] {
-                    return min_val;
-                }
-            } while (probe < table.size() - unrolled_blocks);
-            return std::optional<T>();
+            sz_t slot=get_slot(key);
+            if (non_empty_slots.get(slot)) {
+                sz_t probe = slot / block_size;
+                assert(probe < table.size() - unrolled_blocks);
+                do {
+                    simd_t chunk1 = table[probe++] - (key + 1);
+                    simd_t chunk2 = table[probe++] - (key + 1);
+                    simd_t chunk = stdx::min(chunk2, chunk1);
+                    T min_val = stdx::hmin(chunk) + (key + 1);
+                    if (min_val > key) [[likely]] {
+                        return min_val;
+                    }
+                } while (probe < table.size() - unrolled_blocks);
+                return empty_v;
+            } else {
+                slot = non_empty_slots.next_set(slot);
+                return table[slot/block_size][slot%block_size];
+            }
         }
     };
+
+
 }
