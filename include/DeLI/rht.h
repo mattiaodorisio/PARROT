@@ -328,15 +328,18 @@ namespace DeLI {
     // Iterator for RHT
     template <typename Ti>
     class iterator {
+    public:
       using iterator_category = std::forward_iterator_tag;
       using difference_type   = std::ptrdiff_t;
       using value_type        = Ti;
       using pointer           = Ti*;
       using reference         = Ti&;  // or also value_type&
-      
+    
+    private:
       sz_t index;
       const RHT& rht;
-      public:
+    
+    public:
       /*
       If the invariant on the gaps is preserved, all the following functions takes constant time
       */
