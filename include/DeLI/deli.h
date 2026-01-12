@@ -3,7 +3,10 @@
 #include <vector>
 #include <variant>
 #include <climits>
+#include <optional>
+#include <ranges>
 
+#include "utils.h"
 #include "veb.h"
 #include "rht.h"
 
@@ -13,6 +16,9 @@ namespace DeLI {
 	class DeLI {
 	public:
 		using value_type = T;
+		using inner_t = std::conditional_t<(sizeof(T) <= 4), uint32_t, uint64_t>;
+		static_assert(sizeof(inner_t) == 4 || sizeof(inner_t) == 8, "RHT only supports 32 or 64 bit keys, to be implemented the support for other data types");
+
 		static constexpr int high_bits = sizeof(T) * CHAR_BIT - low_bits;
 		
 		DeLI() {
@@ -22,12 +28,13 @@ namespace DeLI {
 		template <typename It>
 		void bulk_load(It begin, It end) {
 			assert(std::is_sorted(begin, end));
-			
+			auto inner_iter = std::ranges::subrange<It>(begin, end) | std::ranges::views::transform([](T x) { return utils::to_uint<T, inner_t>(x); });
+
 			// Split the input into buckets based on high bits
-			auto bucket_start = begin;
-			T current_high = ((*bucket_start) >> low_bits);
-			for (It it = begin; it != end; ++it) {
-				T high = ((*it) >> low_bits);
+			auto bucket_start = inner_iter.begin();
+			inner_t current_high = (*bucket_start) >> low_bits;
+			for (auto it = inner_iter.begin(); it != inner_iter.end(); ++it) {
+				inner_t high = (*it) >> low_bits;
 				if (high != current_high) {
 					// Bulk load the current bucket
 					top_level[current_high].init(current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
@@ -38,24 +45,27 @@ namespace DeLI {
 			}
 			// Bulk load the last bucket
 			top_level[current_high].init(current_high << low_bits, current_high << low_bits | ((1 << low_bits) - 1));
-			top_level[current_high].bulk_load(bucket_start, end);
+			top_level[current_high].bulk_load(bucket_start, inner_iter.end());
 		}
 		
-		void insert(T key) {
-			T high = (key >> low_bits);
+		void insert(T key_) {
+			inner_t key = utils::to_uint<T, inner_t>(key_);
+			inner_t high = key >> low_bits;
 			if (top_level[high].is_initialized() == false) {
 				top_level[high].init(high << low_bits, high << low_bits | ((1 << low_bits) - 1));
 			}
 			top_level[high].insert(key);
 		}
-		
-		void remove(T key) {
-			T high = (key >> low_bits);
+
+		void remove(T key_) {
+			inner_t key = utils::to_uint<T, inner_t>(key_);
+			inner_t high = key >> low_bits;
 			top_level[high].remove(key);
 		}
-		
-		bool contains(T key) const {
-			T high = (key >> low_bits);
+
+		bool contains(T key_) const {
+			inner_t key = utils::to_uint<T, inner_t>(key_);
+			inner_t high = key >> low_bits;
 			return top_level[high].contains(key);
 		}
 
@@ -77,45 +87,56 @@ namespace DeLI {
 		* Find successor
 		* Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
 		*/
-		T find_next(T key) const {
-			T high = (key >> low_bits);
-			T res = -1;
+		std::optional<T> find_next(T key_) const {
+			inner_t key = utils::to_uint<T, inner_t>(key_);
+			inner_t high = (key >> low_bits);
+			std::optional<inner_t> res = {};
 			if (top_level[high].is_initialized()) {
 				res = top_level[high].find_next(key);
 			}
-			while (res == -1 && ++high < (1 << high_bits)) {
+			while (!res && ++high < (1 << high_bits)) {
 				if (top_level[high].is_initialized())
-				res = top_level[high].min();
+					res = top_level[high].min();
 			}
-			return res;
+			return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
 		}
 		
 		/**
 		* Find predecesor
 		* returns the first element STRICTLY LESS than the given key
 		*/
-		T find_prev(T key) const {
-			T high = (key >> low_bits);
-			T res = -1;
+		std::optional<T> find_prev(T key_) const {
+			inner_t key = utils::to_uint<T, inner_t>(key_);
+			inner_t high = (key >> low_bits);
+			std::optional<inner_t> res = {};
 			if (top_level[high].is_initialized())
 				res = top_level[high].find_prev(key);
-			while (res == -1 && --high >= 0) {
+			
+			while (!res && --high > 0) {
 				if (top_level[high].is_initialized())
 					res = top_level[high].max();
 			}
-			return res;
+
+			// Possible last iteration
+			if (!res) {
+				if (top_level[high].is_initialized())
+					res = top_level[high].max();
+			}
+
+			return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
 		}
-		
-		T min() const {
+
+		std::optional<T> min() const {
 			for (const auto& rht : top_level) {
 				if (rht.is_initialized()) {
-					return rht.min();
+					auto res = rht.min();
+					return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
 				}
 			}
-			return -1;
+			return std::nullopt;
 		}
 		
 		private:
-		std::vector<RHT<T>> top_level;
+		std::vector<RHT<inner_t>> top_level;
 	};
 }

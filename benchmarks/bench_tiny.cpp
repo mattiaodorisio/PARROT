@@ -38,12 +38,16 @@ void bench_query(Index &index, const char * index_name, std::vector<int> & keys,
       auto result = index.find_next(queries[i_] ^ (sum & 0x01));
 #ifndef NDEBUG
       auto lb = std::lower_bound(keys.begin(), keys.end(), queries[i_] ^ (sum & 0x01));
+      if (result && lb == keys.end()) {
+        std::cout << "Error: expected null optional; got: " << result.value() << std::endl;
+        throw std::runtime_error("Incorrect result from find_next");
+      }
       if (result != (lb == keys.end() ? -1 : *lb)) {
-        std::cout << "Error: expected " << *lb << "; got: " << result << std::endl;
+        std::cout << "Error: expected " << *lb << "; got: " << result.value() << std::endl;
         throw std::runtime_error("Incorrect result from find_next");
       }
 #endif
-      sum += result;
+      sum += result.value();
       i_ = (i_ == NUM_QUERIES - 1) ? 0 : i_ + 1;
     }
     state.counters["queried_keys"] = i_;

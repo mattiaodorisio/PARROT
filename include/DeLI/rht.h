@@ -7,6 +7,7 @@
 #include <cassert>
 #include <iterator>
 #include <cstdint>
+#include <optional>
 
 namespace DeLI {
   
@@ -244,11 +245,11 @@ namespace DeLI {
       return true;
     }
     
-    inline T min() const { 
+    inline std::optional<T> min() const {
       return find_next(range_min);
     }
-    
-    inline T max() const { 
+
+    inline std::optional<T> max() const {
       return find_prev(range_max);
     }
     
@@ -260,12 +261,12 @@ namespace DeLI {
     * Find successor
     * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
     */
-   // TODO: return an iterator?
-    T find_next(T key) const {
+    // TODO: return an iterator?
+    std::optional<T> find_next(T key) const {
       key -= range_min;
       sz_t probe = scale(key);
-      if (probe > table.size() || probe < 0) [[unlikely]] return empty_v;
-      
+      if (probe > table.size() || probe < 0) [[unlikely]] return std::nullopt;
+
       if constexpr (search_strategy == binary_search) {
         throw std::runtime_error("Not implemented");
       } else if constexpr (search_strategy == linear_search) {
@@ -274,7 +275,7 @@ namespace DeLI {
           ++probe;
         }
         if (probe == table.size()) {
-          return -1;
+          return std::nullopt;
         }
         return table[probe] + range_min;
       }
@@ -284,11 +285,11 @@ namespace DeLI {
     * Find predecesor
     * returns the first element STRICTLY LESS than the given key
     */
-    T find_prev(T key) const {
+    std::optional<T> find_prev(T key) const {
       key -= range_min;
       sz_t probe = scale(key);
-      if (probe > table.size() || probe < 0) [[unlikely]] return empty_v;
-      
+      if (probe > table.size() || probe < 0) [[unlikely]] return std::nullopt;
+
       if constexpr (search_strategy == binary_search) {
         throw std::runtime_error("Not implemented");
       } else if constexpr (search_strategy == linear_search) {
@@ -300,7 +301,8 @@ namespace DeLI {
         do {
           --probe;
         } while (probe != 0 && table[probe] == empty_v);
-        return probe == 0 && (table[probe] == empty_v || table[probe] >= key) ? -1 : table[probe] + range_min;
+        return probe == 0 && (table[probe] == empty_v || table[probe] >= key) ? 
+            std::nullopt : std::optional<T>(table[probe] + static_cast<T>(range_min));
       }
     }
     
