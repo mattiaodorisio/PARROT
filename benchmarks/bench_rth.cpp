@@ -28,7 +28,7 @@ static uint32_t skewwed(uint64_t hash) {
 }
 
 int main(int argc, char** argv) {
-    size_t n=(1<<21)-(1<<17);
+    size_t n=(1<<10);
     typedef uint32_t T;
     std::vector<T> values;
     values.resize(n);
@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
         values[i]= skewwed(i+1);
     }
 
-    DeLI::RHT<T> rht(1<<24, 64 - 24, values);
+    DeLI::RHT<T> rht(1<<24, 32 - 24, values);
 
     if(true) {
         std::cout << "starting validation" << std::endl;
