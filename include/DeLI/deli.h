@@ -117,5 +117,103 @@ namespace DeLI {
 		
 		private:
 		std::vector<RHT<T>> top_level;
+
+    // Iterator implementation
+    public:
+        using inner_iterator = typename RHT<T>::iterator;
+        using inner_const_iterator = typename RHT<T>::const_iterator;
+
+        template <typename ParentPtr, typename InnerIt>
+        class iterator_base {
+        public:
+            using reference = decltype(*std::declval<InnerIt>());
+            using pointer = decltype(std::declval<InnerIt>().operator->());
+
+            iterator_base() : parent(nullptr), outer_idx(0), inner_it() {}
+            iterator_base(ParentPtr p, std::size_t idx, InnerIt it) : parent(p), outer_idx(idx), inner_it(it) {
+                if (parent) advance_to_valid();
+            }
+
+            reference operator*() const { return *inner_it; }
+            pointer operator->() const { return inner_it.operator->(); }
+
+            iterator_base& operator++() {
+                if (parent && outer_idx < parent->top_level.size()) {
+                    ++inner_it;
+                    advance_to_valid();
+                }
+                return *this;
+            }
+
+            iterator_base operator++(int) { iterator_base tmp = *this; ++*this; return tmp; }
+
+            bool operator==(const iterator_base& other) const {
+                if (parent != other.parent) return false;
+                if (!parent) return true;
+                std::size_t N = parent->top_level.size();
+                if (outer_idx == N && other.outer_idx == N) return true; // both end()
+                return outer_idx == other.outer_idx && inner_it == other.inner_it;
+            }
+            bool operator!=(const iterator_base& other) const { return !(*this == other); }
+
+        private:
+            ParentPtr parent;
+            std::size_t outer_idx;
+            InnerIt inner_it;
+
+			void advance_to_valid() {
+				const std::size_t N = parent->top_level.size();
+				while (outer_idx < N) {
+					auto &r = parent->top_level[outer_idx]; // use auto& so constness follows ParentPtr
+					if (r.is_initialized()) {
+						InnerIt b = r.begin();
+						InnerIt e = r.end();
+						if (inner_it == InnerIt()) inner_it = b; // first time entering this bucket
+						if (inner_it != e) return;               // valid element
+					}
+					++outer_idx;
+					inner_it = InnerIt();
+				}
+				// reached end: leave outer_idx == N, inner_it default
+			}
+        };
+
+        using iterator = iterator_base<DeLI*, inner_iterator>;
+        using const_iterator = iterator_base<const DeLI*, inner_const_iterator>;
+
+        iterator begin() {
+            std::size_t N = top_level.size();
+            for (std::size_t i = 0; i < N; ++i) {
+                if (top_level[i].is_initialized()) {
+                    auto b = top_level[i].begin();
+                    auto e = top_level[i].end();
+                    if (b != e) return iterator(this, i, b);
+                }
+            }
+            return end();
+        }
+
+        iterator end() {
+            return iterator(this, top_level.size(), inner_iterator());
+        }
+
+        const_iterator begin() const {
+            std::size_t N = top_level.size();
+            for (std::size_t i = 0; i < N; ++i) {
+                if (top_level[i].is_initialized()) {
+                    auto b = top_level[i].begin();
+                    auto e = top_level[i].end();
+                    if (b != e) return const_iterator(this, i, b);
+                }
+            }
+            return cend();
+        }
+
+        const_iterator end() const {
+            return const_iterator(this, top_level.size(), inner_const_iterator());
+        }
+
+        const_iterator cbegin() const { return begin(); }
+        const_iterator cend() const { return end(); }
 	};
 }
