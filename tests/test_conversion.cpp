@@ -15,17 +15,19 @@ void test() {
   std::vector<T2> converted_values;
   
   // Generate test values
-  for (int i = -1000; i <= 1000; ++i) {
-    test_values.push_back(static_cast<T1>(i) / 10.0);
+  if constexpr (std::is_signed<T1>::value) {
+    for (int i = -1000; i <= 1000; ++i) {
+      test_values.push_back(static_cast<T1>(i));
+    }
+  } else {
+    for (unsigned int i = 0; i <= 2000; ++i) {
+      test_values.push_back(static_cast<T1>(i));
+    }
   }
   
   // Convert to uint
   for (const auto& val : test_values) {
-    if constexpr (std::is_same<T1, double>::value && std::is_same<T2, uint64_t>::value) {
-      converted_values.push_back(DeLI::utils::to_uint64(val));
-    } else if constexpr (std::is_same<T1, float>::value && std::is_same<T2, uint32_t>::value) {
-      converted_values.push_back(DeLI::utils::to_uint32(val));
-    }
+    converted_values.push_back(DeLI::utils::to_uint<T1, T2>(val));
   }
   
   // Verify sorted order is preserved
@@ -33,11 +35,7 @@ void test() {
   
   // Convert back
   for (size_t i = 0; i < test_values.size(); ++i) {
-    if constexpr (std::is_same<T1, double>::value && std::is_same<T2, uint64_t>::value) {
-      check(test_values[i] == DeLI::utils::from_uint64(converted_values[i]));
-    } else if constexpr (std::is_same<T1, float>::value && std::is_same<T2, uint32_t>::value) {
-      check(test_values[i] == DeLI::utils::from_uint32(converted_values[i]));
-    }
+    check(test_values[i] == (DeLI::utils::from_uint<T1, T2>(converted_values[i])));
   }
 }
 int main() {
@@ -45,6 +43,10 @@ int main() {
   
   test<double, uint64_t>();
   test<float, uint32_t>();
+  test<int32_t, uint32_t>();
+  test<int64_t, uint64_t>();
+  test<unsigned int, uint32_t>();
+  test<unsigned long, uint64_t>();
   
   std::cout << "Test data type passed!" << std::endl;
   return 0;

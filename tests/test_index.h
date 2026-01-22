@@ -31,10 +31,10 @@ void runManualTests(Args &&... args) {
     check(v.find_prev(18) == 15);
     check(v.find_next(15) == 15);
     check(v.find_prev(15) == 10);
-    check(v.find_next(25) == -1);
-    check(v.find_prev(10) == -1);
-
-// Remove
+    check(v.find_next(25).has_value() == false);
+    check(v.find_prev(10).has_value() == false);
+    
+    // Remove
     v.remove(15);
     v.remove(15); // TODO: this is a workaraound: veb does not supoprt duplicates, rht does support duplicates...
     check(!v.contains(15));

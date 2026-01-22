@@ -31,26 +31,26 @@ template <typename Index>
 void bench_query(Index &index, const char * index_name, std::vector<int> & keys, std::vector<int> & queries) {
   auto bench_func = [&](::benchmark::State& state) {
     using T = typename Index::value_type;
-    size_t i = 0;
+    static size_t i_ = 0;
     T sum;
     index.bulk_load(keys.begin(), keys.end());
     for (auto _ : state) {
-      auto result = index.find_next(queries[i]);
+      auto result = index.find_next(queries[i_] ^ (sum & 0x01));
 #ifndef NDEBUG
-      auto lb = std::lower_bound(keys.begin(), keys.end(), queries[i]);
+      auto lb = std::lower_bound(keys.begin(), keys.end(), queries[i_] ^ (sum & 0x01));
+      if (result && lb == keys.end()) {
+        std::cout << "Error: expected null optional; got: " << result.value() << std::endl;
+        throw std::runtime_error("Incorrect result from find_next");
+      }
       if (result != (lb == keys.end() ? -1 : *lb)) {
-        std::cout << "Error: expected " << *lb << "; got: " << result << std::endl;
+        std::cout << "Error: expected " << *lb << "; got: " << result.value() << std::endl;
         throw std::runtime_error("Incorrect result from find_next");
       }
 #endif
-      if (result) {
-        sum += result;
-      }
-      i = (i == NUM_QUERIES - 1) ? 0 : i + 1;
-      benchmark::DoNotOptimize(result);
-      benchmark::ClobberMemory();
+      sum += result.value();
+      i_ = (i_ == NUM_QUERIES - 1) ? 0 : i_ + 1;
     }
-    state.counters["queried_keys"] = i;
+    state.counters["queried_keys"] = i_;
     state.counters["available_keys"] = NUM_KEYS;
     state.counters["dno"] = sum;
   };
