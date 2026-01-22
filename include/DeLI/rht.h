@@ -20,10 +20,9 @@ namespace DeLI {
         sz_t num_elements = 0;
         sz_t slot_shift = 0;
         sz_t begin_slot = 0; // first slot outside of wrapping area
+        const sz_t value_bits = 0; // number of bits of the value that are used, might be constexp in future
 
-        constexpr static sz_t valueBits = sizeof(T) * 8;
-        constexpr static float th_load_factor_min = 0.2;    // TODO tune this parameter
-        constexpr static float th_load_factor_max = 0.8;    // TODO tune this parameter
+        constexpr static int slot_factor = 2;
 
         // Sentinel values for empty slots
         constexpr static T empty_v = std::numeric_limits<T>::max();
@@ -37,22 +36,24 @@ namespace DeLI {
         void bulk_load(It begin, It end) {
             assert(std::is_sorted(begin, end));
             // ToDo: optimize
-            for(It it = begin; it != end; ++it) {
-                insert(*it);
+            for (It it = begin; it != end; ++it) {
+                if (*it != empty_v)
+                    insert(*it);
             }
         }
 
+        sz_t num_slot_target(sz_t num_elements) const {
+            //trick to make 0 map to 0
+            return std::bit_ceil(2 * slot_factor * num_elements) >> 1;
+        }
+
         void ensure_scaling(sz_t new_num_elements) {
-            float load_factor = static_cast<float>(new_num_elements) / table.size();
-            if (load_factor > th_load_factor_max || load_factor < th_load_factor_min) {
-                if (load_factor > th_load_factor_max) {
-                    slot_shift = slot_shift - 1;
-                } else {
-                    slot_shift = slot_shift + 1;
-                }
+            sz_t slot_target = num_slot_target(new_num_elements);
+            if (table.size() < slot_target || table.size() > slot_target * 4) {
                 std::vector<T> table_swap;
-                table_swap.resize(1 << (valueBits - slot_shift), empty_v);
+                table_swap.resize(slot_target, empty_v);
                 std::swap(table, table_swap);
+                slot_shift = value_bits - static_cast<sz_t>(std::countr_zero(slot_target));
                 bulk_load(table_swap.begin(), table_swap.end());
             }
         }
@@ -60,10 +61,14 @@ namespace DeLI {
     public:
         RHT() {};
 
+        RHT(sz_t value_bits) : value_bits(value_bits) {
+        }
+
         void insert(T key) {
             sz_t slot_mask = table.size() - 1;
             ensure_scaling(num_elements + 1);
             sz_t probe = std::max(begin_slot, scale(key));
+            sz_t start_probe = probe;
 
             while (table[probe] < key && table[probe] != empty_v) {
                 probe = (probe + 1) & slot_mask;
@@ -71,19 +76,24 @@ namespace DeLI {
             while (table[probe] != empty_v) {
                 std::swap(key, table[probe]);
                 probe = (probe + 1) & slot_mask;
+                if (probe == begin_slot) {
+                    begin_slot++;
+                }
             }
             table[probe] = key;
             ++num_elements;
+            if (probe < start_probe) // wrapped around
+                begin_slot++;
         }
 
-        void remove(T key) {
+        bool remove(T key) {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
             while (table[probe] < key && table[probe] != empty_v) {
                 probe = (probe + 1) & slot_mask;
             }
             if (table[probe] != key) {
-                throw std::runtime_error("Key not found in remove");
+                return false;
             }
             // Remove the key and shift elements to fill the gap
             while (true) {
@@ -98,7 +108,9 @@ namespace DeLI {
                 table[probe] = table[next_probe];
                 probe = next_probe;
             }
+            num_elements--;
             ensure_scaling(num_elements);
+            return true;
         }
 
         bool contains(T key) const {
@@ -146,14 +158,13 @@ namespace DeLI {
         * Find successor
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
         */
-        // TODO: return an iterator?
-        T find_next(T key) const {
+        std::optional<T> find_next(T key) const {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
             while (table[probe] == empty_v || table[probe] < key) {
                 probe = (probe + 1) & slot_mask;
-                if(probe==begin_slot)
-                    return empty_v;
+                if (probe == begin_slot)
+                    return std::nullopt;
             }
             return table[probe];
         }
@@ -162,15 +173,15 @@ namespace DeLI {
         * Find predecesor
         * returns the first element STRICTLY LESS than the given key
         */
-        T find_prev(T key) const {
+        std::optional<T> find_prev(T key) const {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
 
-            if(table[probe] >= key || table[probe] == empty_v) {
+            if (table[probe] >= key || table[probe] == empty_v) {
                 // probe towards left
                 do {
-                    if(probe==begin_slot)
-                        return empty_v;
+                    if (probe == begin_slot)
+                        return std::nullopt;
                     probe = (probe - 1) & slot_mask;
                 } while (table[probe] == empty_v);
                 return table[probe];
@@ -197,9 +208,6 @@ namespace DeLI {
         }
 
 
-
-
-
         class iterator {
             sz_t index;
             const RHT &rht;
@@ -207,8 +215,12 @@ namespace DeLI {
             iterator() : index(0), rht(*(RHT *) nullptr) {}
 
             iterator(sz_t start_index, const RHT &rht_ref) : index(start_index), rht(rht_ref) {
-                while (index < rht.table.size() && rht.table[index] == empty_v) {
-                    ++index;
+                if (rht.empty()) {
+                    index = sz_t(-1);
+                    return;
+                }
+                while (rht.table[index] == empty_v) {
+                    index = (index + 1) & (rht.table.size() - 1);
                 }
             }
 
@@ -231,10 +243,16 @@ namespace DeLI {
             }
 
             iterator &operator++() {
-                do {
-                    ++index;
-                } while (index < rht.table.size() && rht.table[index] == empty_v);
-                return *this;
+                while (true) {
+                    index = (index + 1) & (rht.table.size() - 1);
+                    if (index == rht.begin_slot) {
+                        index = sz_t(-1);
+                        return *this;
+                    }
+                    if(rht.table[index] != empty_v) {
+                        return *this;
+                    }
+                };
             }
 
             iterator operator++(int) {
@@ -244,11 +262,11 @@ namespace DeLI {
             }
 
             T operator*() const {
-                return rht.table[index] + rht.range_min;
+                return rht.table[index];
             }
 
             T *operator->() const {
-                return &(rht.table[index] + rht.range_min);
+                return &rht.table[index];
             }
 
             bool operator==(const iterator &other) const { return index == other.index; }
@@ -263,8 +281,12 @@ namespace DeLI {
             const_iterator() : index(0), rht(*(const RHT *) nullptr) {}
 
             const_iterator(sz_t start_index, const RHT &rht_ref) : index(start_index), rht(rht_ref) {
-                while (index < rht.table.size() && rht.table[index] == empty_v) {
-                    ++index;
+                if (rht.empty()) {
+                    index = sz_t(-1);
+                    return;
+                }
+                while (rht.table[index] == empty_v) {
+                    index = (index + 1) & (rht.table.size() - 1);
                 }
             }
 
@@ -287,10 +309,16 @@ namespace DeLI {
             }
 
             const_iterator &operator++() {
-                do {
-                    ++index;
-                } while (index < rht.table.size() && rht.table[index] == empty_v);
-                return *this;
+                while (true) {
+                    index = (index + 1) & (rht.table.size() - 1);
+                    if (index == rht.begin_slot) {
+                        index = sz_t(-1);
+                        return *this;
+                    }
+                    if(rht.table[index] != empty_v) {
+                        return *this;
+                    }
+                };
             }
 
             const_iterator operator++(int) {
@@ -300,11 +328,11 @@ namespace DeLI {
             }
 
             T operator*() const {
-                return rht.table[index] + rht.range_min;
+                return rht.table[index];
             }
 
             const T *operator->() const {
-                return &(rht.table[index] + rht.range_min);
+                return &rht.table[index];
             }
 
             bool operator==(const const_iterator &other) const { return index == other.index; }
@@ -313,19 +341,19 @@ namespace DeLI {
         };
 
         iterator begin() {
-            return iterator(0, *this);
+            return iterator(begin_slot, *this);
         }
 
         iterator end() {
-            return iterator(table.size(), *this);
+            return iterator(sz_t(-1), *this);
         }
 
         const_iterator begin() const {
-            return const_iterator(0, *this);
+            return const_iterator(begin_slot, *this);
         }
 
         const_iterator end() const {
-            return const_iterator(table.size(), *this);
+            return const_iterator(sz_t(-1), *this);
         }
 
         const_iterator cbegin() const { return begin(); }
