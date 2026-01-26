@@ -14,25 +14,19 @@ namespace DeLI { //ToDo: offset value in buckets
 
     template<typename T, unsigned int high_bits, unsigned int value_bits = sizeof(T) * CHAR_BIT>
     class DeLI {
+        static_assert(sizeof(T) * CHAR_BIT >= value_bits);
+        static_assert(value_bits >= high_bits);
     private:
         using inner_t = utils::uint_by_bits_t<value_bits>;
-        static constexpr int low_bits = value_bits - high_bits;
+        static constexpr size_t low_bits = value_bits - high_bits;
         static constexpr size_t buckets = size_t(1) << high_bits;
 
         inner_t getBucket(inner_t key) const {
-            if constexpr (low_bits == sizeof(inner_t) * CHAR_BIT) {
-                return 0;
-            } else {
-                return key >> low_bits;
-            }
+            return utils::safe_shr(key, low_bits);
         }
 
         inner_t recombineReuslt(inner_t high, inner_t low) const {
-            if constexpr (low_bits == sizeof(inner_t) * CHAR_BIT) {
-                return low;
-            } else {
-                return (high << low_bits) | low;
-            }
+            return utils::safe_shl(high, low_bits) | low;
         }
 
     public:
@@ -64,10 +58,10 @@ namespace DeLI { //ToDo: offset value in buckets
             top_level[current_high].insert_all(bucket_start, inner_iter.end());
         }
 
-        void insert(T key_) {
+        bool insert(T key_) {
             inner_t key = utils::to_uint<T, inner_t>(key_);
             inner_t high = getBucket(key);
-            top_level[high].insert(key);
+            return top_level[high].insert(key);
         }
 
         bool remove(T key_) {
@@ -140,27 +134,29 @@ namespace DeLI { //ToDo: offset value in buckets
 
         // Iterator implementation
     public:
-        using inner_iterator = typename RHT<low_bits>::iterator;
         using inner_const_iterator = typename RHT<low_bits>::const_iterator;
 
-        template<typename ParentPtr, typename InnerIt>
+        template<typename InnerIt>
         class iterator_base {
         public:
-            using reference = decltype(*std::declval<InnerIt>());
             using pointer = decltype(std::declval<InnerIt>().operator->());
 
-            iterator_base() : parent(nullptr), outer_idx(0), inner_it() {}
-
-            iterator_base(ParentPtr p, std::size_t idx, InnerIt it) : parent(p), outer_idx(idx), inner_it(it) {
-                if (parent) advance_to_valid();
+            iterator_base(const DeLI &p, bool begin) : parent(p), outer_idx(begin ? 0 : parent.top_level.size() - 1),
+                                                       inner_it(begin ? parent.top_level[0].begin() : parent.top_level[
+                                                               parent.top_level.size() - 1].end()) {
+                if (begin) {
+                    advance_to_valid();
+                }
             }
 
-            reference operator*() const { return parent->recombineReuslt(outer_idx, *inner_it);}
+            T operator*() const {
+                return utils::from_uint<T, inner_t>(parent.recombineReuslt(outer_idx, inner_t(*inner_it)));
+            }
 
             pointer operator->() const { return inner_it.operator->(); }
 
             iterator_base &operator++() {
-                if (parent && outer_idx < parent->top_level.size()) {
+                if (outer_idx < parent.top_level.size()) {
                     ++inner_it;
                     advance_to_valid();
                 }
@@ -174,74 +170,37 @@ namespace DeLI { //ToDo: offset value in buckets
             }
 
             bool operator==(const iterator_base &other) const {
-                if (parent != other.parent) return false;
-                if (!parent) return true;
-                std::size_t N = parent->top_level.size();
-                if (outer_idx == N && other.outer_idx == N) return true; // both end()
-                return outer_idx == other.outer_idx && inner_it == other.inner_it;
+                if (parent.top_level.size() != other.parent.top_level.size()) return false;
+                if (outer_idx != other.outer_idx) return false;
+                return inner_it == other.inner_it;
             }
 
             bool operator!=(const iterator_base &other) const { return !(*this == other); }
 
         private:
-            ParentPtr parent;
+            const DeLI &parent;
             std::size_t outer_idx;
             InnerIt inner_it;
 
             void advance_to_valid() {
-                const std::size_t N = parent->top_level.size();
-                while (outer_idx < N) {
-                    auto &r = parent->top_level[outer_idx]; // use auto& so constness follows ParentPtr
-                    if (!r.empty()) {
-                        InnerIt b = r.begin();
-                        InnerIt e = r.end();
-                        if (inner_it == InnerIt()) inner_it = b; // first time entering this bucket
-                        if (inner_it != e) return;               // valid element
-                    }
+                const std::size_t N = parent.top_level.size();
+                while (outer_idx + 1 < N && inner_it == parent.top_level[outer_idx].end()) {
                     ++outer_idx;
-                    inner_it = InnerIt();
+                    inner_it = parent.top_level[outer_idx].begin();
                 }
-                // reached end: leave outer_idx == N, inner_it default
             }
         };
 
-        using iterator = iterator_base<DeLI *, inner_iterator>;
-        using const_iterator = iterator_base<const DeLI *, inner_const_iterator>;
-
-        iterator begin() {
-            std::size_t N = top_level.size();
-            for (std::size_t i = 0; i < N; ++i) {
-                if (!top_level[i].empty()) {
-                    auto b = top_level[i].begin();
-                    auto e = top_level[i].end();
-                    if (b != e) return iterator(this, i, b);
-                }
-            }
-            return end();
+        iterator_base<inner_const_iterator> begin() const {
+            return iterator_base<inner_const_iterator>(*this, true);
         }
 
-        iterator end() {
-            return iterator(this, top_level.size(), inner_iterator());
+        iterator_base<inner_const_iterator> end() const {
+            return iterator_base<inner_const_iterator>(*this, false);
         }
 
-        const_iterator begin() const {
-            std::size_t N = top_level.size();
-            for (std::size_t i = 0; i < N; ++i) {
-                if (!top_level[i].empty()) {
-                    auto b = top_level[i].begin();
-                    auto e = top_level[i].end();
-                    if (b != e) return const_iterator(this, i, b);
-                }
-            }
-            return cend();
-        }
+        iterator_base<inner_const_iterator> cbegin() const { return begin(); }
 
-        const_iterator end() const {
-            return const_iterator(this, top_level.size(), inner_const_iterator());
-        }
-
-        const_iterator cbegin() const { return begin(); }
-
-        const_iterator cend() const { return end(); }
+        iterator_base<inner_const_iterator> cend() const { return end(); }
     };
 }

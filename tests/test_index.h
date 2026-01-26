@@ -6,33 +6,31 @@
 #include <algorithm>
 
 #include "test_utils.h"
-#include "utils.h"
 
 
 template<typename Index, unsigned int bits, typename... Args>
 void runForN(const int N, Args &&... args) {
     using T = DeLI::utils::uint_by_bits_t<bits>;
 
-    if (N > (T(1) << bits) - 1) {
-        std::cout << "Skipping test with N=" << N << " bits=" << bits << " since N > 2^bits" << std::endl;
-        return;
+    if constexpr (bits < 64) {
+        if(N > (size_t(1) << bits)) {
+            std::cout << "Skipping test with N=" << N << " bits=" << bits << " since N > 2^bits" << std::endl;
+            return;
+        }
     }
     std::cout << "Running test with N=" << N << " bits=" << bits << std::endl;
 
     Index v(std::forward<Args>(args)...);
 
-    std::mt19937 rng(N*bits); // deterministic seed for reproducibility
+    std::mt19937 rng(N * bits); // deterministic seed for reproducibility
     std::uniform_int_distribution<T> dist;
 
     std::set<T> model;
 // Insert N unique random values
     while (model.size() < N) {
-        T x = dist(rng) & ((T(1) << bits) - 1);
+        T x = dist(rng) & (safe_shl(T(1), bits) - 1);
         if (model.insert(x).second) {
             v.insert(x);
-            for (T z: model) { //TODO remove
-                check(v.contains(z));
-            }
         }
     }
 
@@ -42,9 +40,9 @@ void runForN(const int N, Args &&... args) {
     }
 
 // Test find_next and find_prev on many random queries
-    const int Q = std::max(N, 1000);
+    const int Q = std::max(N * 2, 1000);
     for (int i = 0; i < Q; ++i) {
-        T q = dist(rng) & ((T(1) << bits) - 1);
+        T q = dist(rng) & (safe_shl(T(1), bits) - 1);
 // expected next: smallest element > q
         auto it_next = model.lower_bound(q);
         if (it_next != model.end()) {
@@ -60,7 +58,7 @@ void runForN(const int N, Args &&... args) {
         }
     }
 
-// remove half of the elements chosen randomly
+// remove most of the elements chosen randomly
     std::vector<T> elems(model.begin(), model.end());
     std::shuffle(elems.begin(), elems.end(), rng);
     int remove_count = N - N / 5;
@@ -126,8 +124,8 @@ void test_index(Args &&... args) {
     // Additional tests
     runForN<Index, bits>(0, std::forward<Args>(args)...);
     runForN<Index, bits>(1, std::forward<Args>(args)...);
-    runForN<Index, bits>(17, std::forward<Args>(args)...);
-    //runForN<Index, bits>(1000, std::forward<Args>(args)...);
+    runForN<Index, bits>(10, std::forward<Args>(args)...);
+    runForN<Index, bits>(1000, std::forward<Args>(args)...);
 
 #if false
     // Test benchmark-like

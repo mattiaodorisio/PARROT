@@ -14,7 +14,7 @@ void test_bits() {
 int main() {
   std::cout << "Running RHT Test" << std::endl;
 
-  test_bits<6>();
+  test_bits<127>();
 
   std::cout << "Test RHT passed!" << std::endl;
   return 0;

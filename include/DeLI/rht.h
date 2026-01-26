@@ -24,8 +24,8 @@ namespace DeLI {
         sz_t slot_shift = 0;
         sz_t begin_slot = 0; // first slot outside of wrapping area
 
-        constexpr static int slot_factor = 1;
-        constexpr static T value_mask = (static_cast<T>(1) << value_bits) - 1;
+        constexpr static sz_t slot_factor = 2;
+        constexpr static T value_mask = utils::safe_shl(T(1), value_bits) - 1;
 
         // Sentinel values for empty slots
         constexpr static T empty_v = std::numeric_limits<T>::max();
@@ -41,23 +41,25 @@ namespace DeLI {
         }
 
         sz_t scale(T key) const {
-            return key >> slot_shift;
+            //return key >> slot_shift;
+            return utils::safe_shr(key, slot_shift);
         }
 
-        sz_t num_slot_target(sz_t num_elements) const {
+        sz_t num_slot_target(sz_t new_num_elements) const {
             //trick to make 0 map to 0
-            sz_t target = std::bit_ceil(size_t(2.1 * double(num_elements))) >> 1;
+            sz_t target = std::bit_ceil(size_t(2 * slot_factor * new_num_elements)) >> 1;
             // ensure at most as many slots as possible values
-            return std::min(target, sz_t(1) << value_bits);
+            if constexpr (value_bits >= 64) {
+                return target;
+            } else {
+                return std::min(target, sz_t(1) << value_bits);
+            }
         }
 
         void ensure_scaling(sz_t new_num_elements) {
             sz_t slot_target = num_slot_target(new_num_elements);
             if (table.size() >= slot_target && table.size() <= slot_target * 4) {
                 return;
-            }
-            if (table.size() > slot_target * 4) {
-                std::cout << "Resizing RHT from " << table.size() << " to " << slot_target << std::endl;
             }
             std::vector<T> table_swap;
             table_swap.resize(slot_target, empty_v);
@@ -69,40 +71,41 @@ namespace DeLI {
                 return;
             }
 
-            /*for (T v : table_swap) {
-                if(v != empty_v) {
-                    insert(v);
-                }
-            }
-            return;*/
             sz_t swap_slot_mask = table_swap.size() - 1;
             sz_t slot_mask = table.size() - 1;
             sz_t swap_index = swap_begin_slot;
-            sz_t index = 0; // points to the bext free slot
+            sz_t next_slot = 0; // points to the next free slot
             while (true) {
-                // a partial second pass might be required because of the wrapping area
                 T v = table_swap[swap_index];
                 if (v != empty_v) {
                     sz_t slot = scale(v);
-                    if (table[slot] == v) {
-                        break;
-                    }
-                    if (slot < index) {
-                        slot = index;
-                    }
-                    index = slot + 1;
-                    slot = slot & slot_mask;
-                    if (slot < scale(v)) {
-                        index = slot + 1;
-                        if (((swap_index + 1) & swap_slot_mask) == swap_begin_slot) {
-                            begin_slot = (slot + 1) & slot_mask;
-                        }
+                    if (slot < next_slot) {
+                        slot = (next_slot++) & slot_mask;
+                    } else {
+                        next_slot = slot + 1;
                     }
                     table[slot] = v;
                 }
                 swap_index = (swap_index + 1) & swap_slot_mask;
+                if (swap_index == swap_begin_slot) {
+                    break;
+                }
             }
-            validate();
+            if (next_slot > table.size()) {
+                // we had a wrap around
+                next_slot = next_slot & slot_mask;
+                begin_slot = next_slot;
+                // correct the elements at the beginning that are overwritten due to wrap around
+                while (true) {
+                    T v = table_swap[swap_index++];
+                    if (v != empty_v) {
+                        if (scale(v) >= next_slot) {
+                            break;
+                        }
+                        table[next_slot++] = v;
+                    }
+                }
+            }
         }
 
     public:
@@ -132,7 +135,6 @@ namespace DeLI {
             ++num_elements;
             if (probe < start_probe) // wrapped around
                 begin_slot++;
-            validate();
             return true;
         }
 
@@ -167,9 +169,7 @@ namespace DeLI {
                 begin_slot--; // wrapped around
             }
             num_elements--;
-            validate();
             ensure_scaling(num_elements);
-            validate();
             return true;
         }
 
@@ -192,6 +192,9 @@ namespace DeLI {
         void clear() {
             table.resize(0);
             table.shrink_to_fit();
+            num_elements = 0;
+            begin_slot = 0;
+            slot_shift = 0;
         }
 
         bool empty() const {
@@ -215,10 +218,6 @@ namespace DeLI {
                 --probe;
             }
             return table[probe];
-        }
-
-        void validate() {
-            assert(d_size() == size());
         }
 
         size_t d_size() {
@@ -290,85 +289,18 @@ namespace DeLI {
         }
 
 
-        class iterator {
-            sz_t index;
-            const RHT &rht;
-        public:
-            iterator() : index(0), rht(*(RHT *) nullptr) {}
-
-            iterator(sz_t start_index, const RHT &rht_ref) : index(start_index), rht(rht_ref) {
-                if (rht.empty()) {
-                    index = sz_t(-1);
-                    return;
-                }
-                while (rht.table[index] == empty_v) {
-                    index = (index + 1) & (rht.table.size() - 1);
-                }
-            }
-
-            iterator(const iterator &other) : index(other.index), rht(other.rht) {}
-
-            iterator(iterator &&other) noexcept: index(other.index), rht(other.rht) {}
-
-            iterator &operator=(const iterator &other) {
-                if (this == &other) return *this;
-                this->~iterator();
-                new(this) iterator(other);
-                return *this;
-            }
-
-            iterator &operator=(iterator &&other) noexcept {
-                if (this == &other) return *this;
-                this->~iterator();
-                new(this) iterator(std::move(other));
-                return *this;
-            }
-
-            iterator &operator++() {
-                while (true) {
-                    index = (index + 1) & (rht.table.size() - 1);
-                    if (index == rht.begin_slot) {
-                        index = sz_t(-1);
-                        return *this;
-                    }
-                    if (rht.table[index] != empty_v) {
-                        return *this;
-                    }
-                };
-            }
-
-            iterator operator++(int) {
-                iterator tmp = *this;
-                ++(*this);
-                return tmp;
-            }
-
-            T operator*() const {
-                return rht.table[index];
-            }
-
-            T *operator->() const {
-                return &rht.table[index];
-            }
-
-            bool operator==(const iterator &other) const { return index == other.index; }
-
-            bool operator!=(const iterator &other) const { return index != other.index; }
-        };
-
         class const_iterator {
             sz_t index;
             const RHT &rht;
         public:
-            const_iterator() : index(0), rht(*(const RHT *) nullptr) {}
-
-            const_iterator(sz_t start_index, const RHT &rht_ref) : index(start_index), rht(rht_ref) {
-                if (rht.empty()) {
+            const_iterator(bool begin, const RHT &rht_ref) : rht(rht_ref) {
+                if (!begin || rht.empty()) {
                     index = sz_t(-1);
-                    return;
-                }
-                while (rht.table[index] == empty_v) {
-                    index = (index + 1) & (rht.table.size() - 1);
+                } else {
+                    index = rht.begin_slot;
+                    while (rht.table[index] == empty_v) {
+                        index++;
+                    }
                 }
             }
 
@@ -391,6 +323,7 @@ namespace DeLI {
             }
 
             const_iterator &operator++() {
+                assert(index != sz_t(-1));
                 while (true) {
                     index = (index + 1) & (rht.table.size() - 1);
                     if (index == rht.begin_slot) {
@@ -422,20 +355,12 @@ namespace DeLI {
             bool operator!=(const const_iterator &other) const { return index != other.index; }
         };
 
-        iterator begin() {
-            return iterator(begin_slot, *this);
-        }
-
-        iterator end() {
-            return iterator(sz_t(-1), *this);
-        }
-
         const_iterator begin() const {
-            return const_iterator(begin_slot, *this);
+            return const_iterator(true, *this);
         }
 
         const_iterator end() const {
-            return const_iterator(sz_t(-1), *this);
+            return const_iterator(false, *this);
         }
 
         const_iterator cbegin() const { return begin(); }

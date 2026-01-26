@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <cstring>
 #include <type_traits>
+#include <limits>
+#include <string>
+#include <algorithm>
 
 namespace DeLI::utils {
   
@@ -100,6 +103,56 @@ namespace DeLI::utils {
     return x;
   }
 
+
+    template <typename UInt>
+    constexpr UInt safe_shl(UInt value, unsigned shift) noexcept
+    {
+      static_assert(std::is_unsigned_v<UInt>, "UInt must be an unsigned integer type");
+
+      constexpr unsigned bits = std::numeric_limits<UInt>::digits;
+
+      return shift < bits ? (value << shift) : UInt{0};
+    }
+
+    template <typename UInt>
+    constexpr UInt safe_shr(UInt value, unsigned shift) noexcept
+    {
+      static_assert(std::is_unsigned_v<UInt>, "UInt must be an unsigned integer type");
+
+      constexpr unsigned bits = std::numeric_limits<UInt>::digits;
+
+      return shift < bits ? (value >> shift) : UInt{0};
+    }
+
+    template <typename UInt>
+    std::string to_string_unsigned(UInt value)
+    {
+      static_assert(std::is_unsigned_v<UInt>);
+
+      if (value == 0)
+        return "0";
+
+      std::string result;
+      while (value > 0)
+      {
+        result.push_back(char('0' + (value % 10)));
+        value /= 10;
+      }
+
+      std::reverse(result.begin(), result.end());
+      return result;
+    }
+
+    template <typename UInt>
+    std::string to_string(UInt value)
+    {
+      if constexpr (std::is_same_v<UInt, __uint128_t>)
+        return to_string_unsigned(value);
+      else
+        return std::to_string(value);
+    }
+
+
     template <size_t Bits>
     using uint_by_bits_t =
             std::conditional_t<(Bits <= 8),   uint8_t,
@@ -111,3 +164,4 @@ namespace DeLI::utils {
 
 
 } // namespace DeLI::utils
+
