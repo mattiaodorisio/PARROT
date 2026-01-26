@@ -8,11 +8,14 @@
 #include <iterator>
 #include <cstdint>
 
+#include "utils.h"
+
 namespace DeLI {
 
-    template<typename T>
+    template<unsigned int value_bits>
     class RHT {
     public:
+        using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
         using sz_t = size_t; // TODO check, a smaller type should be feasible for us
 
     private:
@@ -20,77 +23,132 @@ namespace DeLI {
         sz_t num_elements = 0;
         sz_t slot_shift = 0;
         sz_t begin_slot = 0; // first slot outside of wrapping area
-        const sz_t value_bits = 0; // number of bits of the value that are used, might be constexp in future
 
-        constexpr static int slot_factor = 2;
+        constexpr static int slot_factor = 1;
+        constexpr static T value_mask = (static_cast<T>(1) << value_bits) - 1;
 
         // Sentinel values for empty slots
         constexpr static T empty_v = std::numeric_limits<T>::max();
 
+        void print_table() const {
+            for (sz_t i = 0; i < table.size(); ++i) {
+                if (table[i] == empty_v)
+                    std::cout << ". ";
+                else
+                    std::cout << table[i] << " ";
+            }
+            std::cout << std::endl;
+        }
 
         sz_t scale(T key) const {
             return key >> slot_shift;
         }
 
-        template<typename It>
-        void bulk_load(It begin, It end) {
-            assert(std::is_sorted(begin, end));
-            // ToDo: optimize
-            for (It it = begin; it != end; ++it) {
-                if (*it != empty_v)
-                    insert(*it);
-            }
-        }
-
         sz_t num_slot_target(sz_t num_elements) const {
             //trick to make 0 map to 0
-            return std::bit_ceil(2 * slot_factor * num_elements) >> 1;
+            sz_t target = std::bit_ceil(size_t(2.1 * double(num_elements))) >> 1;
+            // ensure at most as many slots as possible values
+            return std::min(target, sz_t(1) << value_bits);
         }
 
         void ensure_scaling(sz_t new_num_elements) {
             sz_t slot_target = num_slot_target(new_num_elements);
-            if (table.size() < slot_target || table.size() > slot_target * 4) {
-                std::vector<T> table_swap;
-                table_swap.resize(slot_target, empty_v);
-                std::swap(table, table_swap);
-                slot_shift = value_bits - static_cast<sz_t>(std::countr_zero(slot_target));
-                bulk_load(table_swap.begin(), table_swap.end());
+            if (table.size() >= slot_target && table.size() <= slot_target * 4) {
+                return;
             }
+            if (table.size() > slot_target * 4) {
+                std::cout << "Resizing RHT from " << table.size() << " to " << slot_target << std::endl;
+            }
+            std::vector<T> table_swap;
+            table_swap.resize(slot_target, empty_v);
+            std::swap(table, table_swap);
+            slot_shift = value_bits - static_cast<sz_t>(std::countr_zero(slot_target));
+            sz_t swap_begin_slot = begin_slot;
+            begin_slot = 0;
+            if (num_elements == 0) {
+                return;
+            }
+
+            /*for (T v : table_swap) {
+                if(v != empty_v) {
+                    insert(v);
+                }
+            }
+            return;*/
+            sz_t swap_slot_mask = table_swap.size() - 1;
+            sz_t slot_mask = table.size() - 1;
+            sz_t swap_index = swap_begin_slot;
+            sz_t index = 0; // points to the bext free slot
+            while (true) {
+                // a partial second pass might be required because of the wrapping area
+                T v = table_swap[swap_index];
+                if (v != empty_v) {
+                    sz_t slot = scale(v);
+                    if (table[slot] == v) {
+                        break;
+                    }
+                    if (slot < index) {
+                        slot = index;
+                    }
+                    index = slot + 1;
+                    slot = slot & slot_mask;
+                    if (slot < scale(v)) {
+                        index = slot + 1;
+                        if (((swap_index + 1) & swap_slot_mask) == swap_begin_slot) {
+                            begin_slot = (slot + 1) & slot_mask;
+                        }
+                    }
+                    table[slot] = v;
+                }
+                swap_index = (swap_index + 1) & swap_slot_mask;
+            }
+            validate();
         }
 
     public:
-        RHT() {};
 
-        RHT(sz_t value_bits) : value_bits(value_bits) {
-        }
-
-        void insert(T key) {
-            sz_t slot_mask = table.size() - 1;
+        bool insert(T key) {
             ensure_scaling(num_elements + 1);
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
             sz_t start_probe = probe;
 
             while (table[probe] < key && table[probe] != empty_v) {
                 probe = (probe + 1) & slot_mask;
+                if (probe == begin_slot) {
+                    break;
+                }
+            }
+            if (table[probe] == key) {
+                // Key already exists
+                return false;
             }
             while (table[probe] != empty_v) {
                 std::swap(key, table[probe]);
                 probe = (probe + 1) & slot_mask;
-                if (probe == begin_slot) {
-                    begin_slot++;
-                }
             }
             table[probe] = key;
             ++num_elements;
             if (probe < start_probe) // wrapped around
                 begin_slot++;
+            validate();
+            return true;
         }
 
         bool remove(T key) {
+            if (table.empty()) {
+                return false;
+            }
+            key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
+            sz_t probe_begin = probe;
             while (table[probe] < key && table[probe] != empty_v) {
                 probe = (probe + 1) & slot_mask;
+                if (probe == begin_slot) {
+                    break;
+                }
             }
             if (table[probe] != key) {
                 return false;
@@ -98,26 +156,35 @@ namespace DeLI {
             // Remove the key and shift elements to fill the gap
             while (true) {
                 sz_t next_probe = (probe + 1) & slot_mask;
-                if (table[next_probe] == empty_v) {
+                if (table[next_probe] == empty_v || scale(table[next_probe]) == next_probe) {
                     table[probe] = empty_v;
                     break;
-                }
-                if (scale(table[next_probe]) == next_probe) {
-                    break; // the key at next_probe is in its home position
                 }
                 table[probe] = table[next_probe];
                 probe = next_probe;
             }
+            if (probe < probe_begin) {
+                begin_slot--; // wrapped around
+            }
             num_elements--;
+            validate();
             ensure_scaling(num_elements);
+            validate();
             return true;
         }
 
         bool contains(T key) const {
+            if (empty()) {
+                return false;
+            }
+            key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
             while (table[probe] < key && table[probe] != empty_v) {
                 probe = (probe + 1) & slot_mask;
+                if (probe == begin_slot) {
+                    break;
+                }
             }
             return (table[probe] == key);
         }
@@ -150,6 +217,19 @@ namespace DeLI {
             return table[probe];
         }
 
+        void validate() {
+            assert(d_size() == size());
+        }
+
+        size_t d_size() {
+            size_t cnt = 0;
+            for (int i = 0; i < table.size(); ++i) {
+                if (table[i] != empty_v)
+                    cnt++;
+            }
+            return cnt;
+        }
+
         size_t size() const {
             return num_elements;
         }
@@ -159,6 +239,7 @@ namespace DeLI {
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
         */
         std::optional<T> find_next(T key) const {
+            key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
             while (table[probe] == empty_v || table[probe] < key) {
@@ -174,6 +255,7 @@ namespace DeLI {
         * returns the first element STRICTLY LESS than the given key
         */
         std::optional<T> find_prev(T key) const {
+            key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
 
@@ -249,7 +331,7 @@ namespace DeLI {
                         index = sz_t(-1);
                         return *this;
                     }
-                    if(rht.table[index] != empty_v) {
+                    if (rht.table[index] != empty_v) {
                         return *this;
                     }
                 };
@@ -315,7 +397,7 @@ namespace DeLI {
                         index = sz_t(-1);
                         return *this;
                     }
-                    if(rht.table[index] != empty_v) {
+                    if (rht.table[index] != empty_v) {
                         return *this;
                     }
                 };

@@ -11,10 +11,14 @@ namespace DeLI::utils {
   // Generic template functions - to be specialized for specific types
   // UIntType can only be uint32_t or uint64_t
   template<typename T, typename UIntType>
-  inline UIntType to_uint(const T value);
+  inline UIntType to_uint(const T value) {
+      return UIntType(value);
+  }
   
   template<typename T, typename UIntType>
-  inline T from_uint(UIntType x);
+  inline T from_uint(UIntType x) {
+      return T(x);
+  }
   
   // Specializations for double -> uint64_t
   template<>
@@ -95,5 +99,15 @@ namespace DeLI::utils {
   inline uint32_t from_uint<uint32_t, uint32_t>(uint32_t x) {
     return x;
   }
+
+    template <size_t Bits>
+    using uint_by_bits_t =
+            std::conditional_t<(Bits <= 8),   uint8_t,
+                    std::conditional_t<(Bits <= 16),  uint16_t,
+                            std::conditional_t<(Bits <= 32),  uint32_t,
+                                    std::conditional_t<(Bits <= 64),  uint64_t,
+                                            __uint128_t>>>>;
+
+
 
 } // namespace DeLI::utils
