@@ -39,23 +39,28 @@ namespace DeLI { //ToDo: offset value in buckets
         template<typename It>
         void bulk_load(It begin, It end) {
             assert(std::is_sorted(begin, end));
+            if(begin == end) {
+                return;
+            }
             auto inner_iter = std::ranges::subrange<It>(begin, end) |
                               std::ranges::views::transform([](T x) { return utils::to_uint<T, inner_t>(x); });
 
             // Split the input into buckets based on high bits
             auto bucket_start = inner_iter.begin();
             inner_t current_high = getBucket(*bucket_start);
+            size_t keys_in_bucket = 0;
             for (auto it = inner_iter.begin(); it != inner_iter.end(); ++it) {
                 inner_t high = getBucket(*it);
                 if (high != current_high) {
                     // Bulk load the current bucket
-                    top_level[current_high].insert_all(bucket_start, it);
+                    top_level[current_high].bulk_load(bucket_start, it, keys_in_bucket);
                     bucket_start = it;
                     current_high = high;
+                    keys_in_bucket = 0;
                 }
+                keys_in_bucket++;
             }
-            // Bulk load the last bucket
-            top_level[current_high].insert_all(bucket_start, inner_iter.end());
+            top_level[current_high].bulk_load(bucket_start, inner_iter.end(), keys_in_bucket);
         }
 
         bool insert(T key_) {

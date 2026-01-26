@@ -19,7 +19,7 @@ int main() {
 
     test_bits<127, 0, 7>();
     test_bits<127, 8, 8>();
-    test_bits<127, 16,9>();
+    test_bits<127, 16, 9>();
 
     std::cout << "Test DeLI passed!" << std::endl;
     return 0;

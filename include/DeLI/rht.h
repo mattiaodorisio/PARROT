@@ -20,15 +20,17 @@ namespace DeLI {
 
     private:
         std::vector<T> table;
-        sz_t num_elements = 0;
-        sz_t slot_shift = 0;
-        sz_t begin_slot = 0; // first slot outside of wrapping area
+        sz_t num_elements;
+        sz_t slot_shift;
+        sz_t begin_slot; // first slot outside of wrapping area
 
-        constexpr static sz_t slot_factor = 2;
+        constexpr static sz_t inv_max_load = 2;
+        constexpr static sz_t shrink_threshold = 4;
         constexpr static T value_mask = utils::safe_shl(T(1), value_bits) - 1;
 
         // Sentinel values for empty slots
         constexpr static T empty_v = std::numeric_limits<T>::max();
+
 
         void print_table() const {
             for (sz_t i = 0; i < table.size(); ++i) {
@@ -41,13 +43,12 @@ namespace DeLI {
         }
 
         sz_t scale(T key) const {
-            //return key >> slot_shift;
             return utils::safe_shr(key, slot_shift);
         }
 
         sz_t num_slot_target(sz_t new_num_elements) const {
             //trick to make 0 map to 0
-            sz_t target = std::bit_ceil(size_t(2 * slot_factor * new_num_elements)) >> 1;
+            sz_t target = std::bit_ceil(size_t(2 * inv_max_load * new_num_elements)) >> 1;
             // ensure at most as many slots as possible values
             if constexpr (value_bits >= 64) {
                 return target;
@@ -56,28 +57,16 @@ namespace DeLI {
             }
         }
 
-        void ensure_scaling(sz_t new_num_elements) {
-            sz_t slot_target = num_slot_target(new_num_elements);
-            if (table.size() >= slot_target && table.size() <= slot_target * 4) {
-                return;
-            }
-            std::vector<T> table_swap;
-            table_swap.resize(slot_target, empty_v);
-            std::swap(table, table_swap);
-            slot_shift = value_bits - static_cast<sz_t>(std::countr_zero(slot_target));
-            sz_t swap_begin_slot = begin_slot;
-            begin_slot = 0;
-            if (num_elements == 0) {
-                return;
-            }
-
-            sz_t swap_slot_mask = table_swap.size() - 1;
+        template<typename It>
+        void insert_sorted(It begin, It end) {
+            assert(std::is_sorted(begin, end));
+            It begin_2 = begin;
             sz_t slot_mask = table.size() - 1;
-            sz_t swap_index = swap_begin_slot;
             sz_t next_slot = 0; // points to the next free slot
-            while (true) {
-                T v = table_swap[swap_index];
+            while (begin != end) {
+                T v = *begin & value_mask;
                 if (v != empty_v) {
+                    num_elements++;
                     sz_t slot = scale(v);
                     if (slot < next_slot) {
                         slot = (next_slot++) & slot_mask;
@@ -86,29 +75,56 @@ namespace DeLI {
                     }
                     table[slot] = v;
                 }
-                swap_index = (swap_index + 1) & swap_slot_mask;
-                if (swap_index == swap_begin_slot) {
-                    break;
-                }
+                begin++;
             }
             if (next_slot > table.size()) {
                 // we had a wrap around
                 next_slot = next_slot & slot_mask;
                 begin_slot = next_slot;
                 // correct the elements at the beginning that are overwritten due to wrap around
-                while (true) {
-                    T v = table_swap[swap_index++];
+                while (begin_2!=end) {
+                    T v = *begin_2 & value_mask;
                     if (v != empty_v) {
                         if (scale(v) >= next_slot) {
                             break;
                         }
                         table[next_slot++] = v;
                     }
+                    begin_2++;
                 }
             }
         }
 
+        template<typename It>
+        RHT(It begin, It end, sz_t slots) : begin_slot(0), num_elements(0), table(slots, empty_v), slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))) {
+            insert_sorted(begin, end);
+        }
+
+        void ensure_scaling(sz_t new_num_elements) {
+            sz_t slot_target = num_slot_target(new_num_elements);
+            if (table.size() >= slot_target && table.size() <= slot_target * shrink_threshold) {
+                return;
+            }
+            RHT reseized = RHT(begin(), end(), slot_target);
+            std::swap(*this, reseized);
+        }
+
     public:
+
+        RHT() : table(0), begin_slot(0), slot_shift(0), num_elements(0) {
+        }
+
+        template<typename It>
+        void bulk_load(It b, It e, size_t keys) {
+            assert(std::distance(b,e)==keys);
+            RHT replacement = RHT(b, e, num_slot_target(keys));
+            std::swap(*this, replacement);
+        }
+
+        template<typename It>
+        void bulk_load(It begin, It end) {
+            bulk_load(begin, end, std::distance(begin, end));
+        }
 
         bool insert(T key) {
             ensure_scaling(num_elements + 1);
@@ -190,11 +206,8 @@ namespace DeLI {
         }
 
         void clear() {
-            table.resize(0);
-            table.shrink_to_fit();
-            num_elements = 0;
-            begin_slot = 0;
-            slot_shift = 0;
+            RHT empty_rht;
+            std::swap(*this, empty_rht);
         }
 
         bool empty() const {
@@ -300,6 +313,10 @@ namespace DeLI {
                     index = rht.begin_slot;
                     while (rht.table[index] == empty_v) {
                         index++;
+                        if(index == rht.table.size()) {
+                            index = sz_t(-1);
+                            break;
+                        }
                     }
                 }
             }
