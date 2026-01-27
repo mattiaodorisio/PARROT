@@ -12,7 +12,7 @@
 
 namespace DeLI {
 
-    template<unsigned int value_bits>
+    template<bool dynamic, unsigned int value_bits>
     class RHT {
     public:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
@@ -82,7 +82,7 @@ namespace DeLI {
                 next_slot = next_slot & slot_mask;
                 begin_slot = next_slot;
                 // correct the elements at the beginning that are overwritten due to wrap around
-                while (begin_2!=end) {
+                while (begin_2 != end) {
                     T v = *begin_2 & value_mask;
                     if (v != empty_v) {
                         if (scale(v) >= next_slot) {
@@ -96,7 +96,8 @@ namespace DeLI {
         }
 
         template<typename It>
-        RHT(It begin, It end, sz_t slots) : begin_slot(0), num_elements(0), table(slots, empty_v), slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))) {
+        RHT(It begin, It end, sz_t slots) : begin_slot(0), num_elements(0), table(slots, empty_v),
+                                            slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))) {
             insert_sorted(begin, end);
         }
 
@@ -116,7 +117,7 @@ namespace DeLI {
 
         template<typename It>
         void bulk_load(It b, It e, size_t keys) {
-            assert(std::distance(b,e)==keys);
+            assert(std::distance(b, e) == keys);
             RHT replacement = RHT(b, e, num_slot_target(keys));
             std::swap(*this, replacement);
         }
@@ -126,7 +127,7 @@ namespace DeLI {
             bulk_load(begin, end, std::distance(begin, end));
         }
 
-        bool insert(T key) {
+        bool insert(T key) requires(dynamic) {
             ensure_scaling(num_elements + 1);
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
@@ -154,7 +155,9 @@ namespace DeLI {
             return true;
         }
 
-        bool remove(T key) {
+        bool insert(T key) requires(!dynamic) = delete;
+
+        bool remove(T key) requires(dynamic) {
             if (table.empty()) {
                 return false;
             }
@@ -189,6 +192,8 @@ namespace DeLI {
             return true;
         }
 
+        bool remove(T key) requires(!dynamic) = delete;
+
         bool contains(T key) const {
             if (empty()) {
                 return false;
@@ -211,11 +216,13 @@ namespace DeLI {
         }
 
         bool empty() const {
-            return table.empty();
+            return num_elements == 0;
         }
 
-        inline T min() const {
-            assert(!empty());
+        inline std::optional<T> min() const {
+            if (empty()) {
+                return std::nullopt;
+            }
             sz_t probe = begin_slot;
             while (table[probe] == empty_v) {
                 ++probe;
@@ -223,8 +230,10 @@ namespace DeLI {
             return table[probe];
         }
 
-        inline T max() const {
-            assert(!empty());
+        inline std::optional<T> max() const {
+            if (empty()) {
+                return std::nullopt;
+            }
             sz_t slot_mask = table.size() - 1;
             sz_t probe = (begin_slot - 1) & slot_mask;
             while (table[probe] == empty_v) {
@@ -251,6 +260,9 @@ namespace DeLI {
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
         */
         std::optional<T> find_next(T key) const {
+            if (empty()) {
+                return std::nullopt;
+            }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
@@ -267,6 +279,9 @@ namespace DeLI {
         * returns the first element STRICTLY LESS than the given key
         */
         std::optional<T> find_prev(T key) const {
+            if (empty()) {
+                return std::nullopt;
+            }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
@@ -313,7 +328,7 @@ namespace DeLI {
                     index = rht.begin_slot;
                     while (rht.table[index] == empty_v) {
                         index++;
-                        if(index == rht.table.size()) {
+                        if (index == rht.table.size()) {
                             index = sz_t(-1);
                             break;
                         }
