@@ -2,21 +2,23 @@
 #include "rht.h"
 #include "test_index.h"
 
-template<bool dynamic, size_t bits>
+template<size_t stride, bool dynamic, size_t bits, DeLI::RhtOptimization opt>
 void test_bits() {
-    using Index = DeLI::RHT<dynamic, bits>;
+    using Index = DeLI::RHT<dynamic, bits, opt>;
     test_index<Index, bits>();
-    if constexpr (bits>1) {
-        test_bits<dynamic, bits-1>();
+    if constexpr (bits >= stride) {
+        test_bits<stride, dynamic, bits - stride, opt>();
     }
 }
 
 int main() {
-  std::cout << "Running RHT Test" << std::endl;
+    std::cout << "Running RHT Test" << std::endl;
 
-  test_bits<true, 127>();
-  test_bits<false, 127>();
+    test_bits<9, true, 127, DeLI::RhtOptimization::none>();
+    test_bits<10, false, 127, DeLI::RhtOptimization::gap_fill_predecessor>();
+    test_bits<11, false, 127, DeLI::RhtOptimization::gap_fill_successor>();
+    test_bits<12, false, 127, DeLI::RhtOptimization::gap_fill_both>();
 
-  std::cout << "Test RHT passed!" << std::endl;
-  return 0;
+    std::cout << "Test RHT passed!" << std::endl;
+    return 0;
 }

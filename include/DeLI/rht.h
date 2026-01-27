@@ -11,9 +11,22 @@
 #include "utils.h"
 
 namespace DeLI {
+    enum class RhtOptimization {
+        none,
+        bit_array,
+        gap_fill_predecessor,
+        gap_fill_successor,
+        gap_fill_both
+    };
 
-    template<bool dynamic, unsigned int value_bits>
+
+    template<bool dynamic, unsigned int value_bits, RhtOptimization opt>
     class RHT {
+        static_assert(value_bits < 128);
+        static_assert(RhtOptimization::gap_fill_successor != opt || !dynamic);
+        static_assert(RhtOptimization::gap_fill_predecessor != opt || !dynamic);
+        static_assert(RhtOptimization::gap_fill_both != opt || !dynamic);
+
     public:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
         using sz_t = size_t; // TODO check, a smaller type should be feasible for us
@@ -30,6 +43,11 @@ namespace DeLI {
 
         // Sentinel values for empty slots
         constexpr static T empty_v = std::numeric_limits<T>::max();
+
+        constexpr static bool gap_fill_p =
+                opt == RhtOptimization::gap_fill_predecessor || opt == RhtOptimization::gap_fill_both;
+        constexpr static bool gap_fill_s =
+                opt == RhtOptimization::gap_fill_successor || opt == RhtOptimization::gap_fill_both;
 
 
         void print_table() const {
@@ -55,6 +73,23 @@ namespace DeLI {
             } else {
                 return std::min(target, sz_t(1) << value_bits);
             }
+        }
+
+        template<bool alternating, bool succ>
+        void fill_gaps() {
+            sz_t slot_mask = table.size() - 1;
+            sz_t slot = succ ? begin_slot : (begin_slot - 1);
+            T last_highest = std::numeric_limits<T>::max();
+            do {
+                slot = (succ ? (slot - 1) : (slot + 1)) & slot_mask;
+                if (table[slot] == empty_v) {
+                    if (!alternating || slot % 2 == succ)
+                        table[slot] = last_highest | (T(1) << value_bits);
+                } else {
+                    if (table[slot] >> value_bits == 0)
+                        last_highest = table[slot];
+                }
+            } while (slot != begin_slot);
         }
 
         template<typename It>
@@ -91,6 +126,21 @@ namespace DeLI {
                         table[next_slot++] = v;
                     }
                     begin_2++;
+                }
+            }
+            if (!table.empty()) {
+                if constexpr (gap_fill_s) {
+                    fill_gaps<opt == RhtOptimization::gap_fill_both, true>();
+                }
+                if constexpr (gap_fill_p) {
+                    fill_gaps<opt == RhtOptimization::gap_fill_both, false>();
+                }
+                if constexpr (gap_fill_s || gap_fill_p) {
+                    for (int i = 0; i < table.size(); ++i) {
+                        if (table[i] != empty_v) {
+                            table[i] &= value_mask;
+                        }
+                    }
                 }
             }
         }
@@ -292,7 +342,7 @@ namespace DeLI {
                     if (probe == begin_slot)
                         return std::nullopt;
                     probe = (probe - 1) & slot_mask;
-                } while (table[probe] == empty_v);
+                } while (table[probe] >= key);
                 return table[probe];
             } else {
                 // probe towards right

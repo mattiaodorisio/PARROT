@@ -12,23 +12,24 @@
 
 namespace DeLI { //ToDo: offset value in buckets
 
-    template<bool dynamic, size_t low_bits, typename inner_t>
+    template<bool dynamic, size_t low_bits, typename inner_t, RhtOptimization opt>
     struct bucket;
 
-    template<size_t low_bits, typename inner_t>
-    struct bucket<true, low_bits, inner_t> {
-        RHT<true, low_bits> rht;
+    template<size_t low_bits, typename inner_t, RhtOptimization opt>
+    struct bucket<true, low_bits, inner_t, opt> {
+        RHT<true, low_bits, opt> rht;
     };
 
-    template<size_t low_bits, typename inner_t>
-    struct bucket<false, low_bits, inner_t> {
-        RHT<false, low_bits> rht;
+    template<size_t low_bits, typename inner_t, RhtOptimization opt>
+    struct bucket<false, low_bits, inner_t, opt> {
+        RHT<false, low_bits, opt> rht;
         std::optional<inner_t> predecessor;
         std::optional<inner_t> successor;
     };
 
-    template<bool dynamic, typename T, unsigned int high_bits, unsigned int value_bits = sizeof(T) * CHAR_BIT>
+    template<bool dynamic, RhtOptimization opt, typename T, unsigned int high_bits, unsigned int value_bits = sizeof(T) * CHAR_BIT>
     class DeLI {
+        static_assert(value_bits < 128);
         static_assert(sizeof(T) * CHAR_BIT >= value_bits);
         static_assert(value_bits >= high_bits);
     private:
@@ -199,11 +200,11 @@ namespace DeLI { //ToDo: offset value in buckets
         }
 
     private:
-        std::vector<bucket<dynamic, low_bits, inner_t>> top_level;
+        std::vector<bucket<dynamic, low_bits, inner_t, opt>> top_level;
 
         // Iterator implementation
     public:
-        using inner_const_iterator = typename RHT<dynamic, low_bits>::const_iterator;
+        using inner_const_iterator = typename RHT<dynamic, low_bits, opt>::const_iterator;
 
         template<typename InnerIt>
         class iterator_base {
