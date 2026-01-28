@@ -152,6 +152,53 @@ namespace DeLI::utils {
         return std::to_string(value);
     }
 
+    template<typename T, std::size_t Alignment = 64>
+    struct AlignedAllocator {
+        using value_type = T;
+
+        AlignedAllocator() noexcept = default;
+
+        template<class U>
+        constexpr AlignedAllocator(const AlignedAllocator<U, Alignment> &) noexcept {}
+
+        T *allocate(std::size_t n) {
+          if (n == 0) return nullptr;
+          void *ptr = nullptr;
+#if __cpp_aligned_new >= 201606L
+          ptr = ::operator new(n * sizeof(T), std::align_val_t(Alignment));
+#else
+          if (posix_memalign(&ptr, Alignment, n * sizeof(T))) ptr = nullptr;
+#endif
+          if (!ptr) throw std::bad_alloc();
+          return static_cast<T *>(ptr);
+        }
+
+        void deallocate(T *p, std::size_t) noexcept {
+#if __cpp_aligned_new >= 201606L
+          ::operator delete(p, std::align_val_t(Alignment));
+#else
+          std::free(p);
+#endif
+        }
+
+        // === Required for older STL / rebind ===
+        template<typename U>
+        struct rebind {
+            using other = AlignedAllocator<U, Alignment>;
+        };
+    };
+
+// comparison operators
+    template<typename T1, typename T2, std::size_t A>
+    bool operator==(const AlignedAllocator<T1, A> &, const AlignedAllocator<T2, A> &) { return true; }
+
+    template<typename T1, typename T2, std::size_t A>
+    bool operator!=(const AlignedAllocator<T1, A> &, const AlignedAllocator<T2, A> &) { return false; }
+
+// alias
+    template<typename T, std::size_t Alignment = 64>
+    using AlignedVector = std::vector<T, AlignedAllocator<T, Alignment>>;
+
 
     template <size_t Bits>
     using uint_by_bits_t =

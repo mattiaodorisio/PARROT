@@ -169,8 +169,8 @@ void runForN(const int N, Args &&... args) {
 
 template<typename Index, unsigned int bits, bool allow_pred_equality = false, typename... Args>
 void test_index(Args &&... args) {
-    //runForN<Index, allow_pred_equality, bits>(0, std::forward<Args>(args)...);
-    //runForN<Index, allow_pred_equality, bits>(1, std::forward<Args>(args)...);
+    runForN<Index, allow_pred_equality, bits>(0, std::forward<Args>(args)...);
+    runForN<Index, allow_pred_equality, bits>(1, std::forward<Args>(args)...);
     runForN<Index, allow_pred_equality, bits>(10, std::forward<Args>(args)...);
     runForN<Index, allow_pred_equality, bits>(100, std::forward<Args>(args)...);
     runForN<Index, allow_pred_equality, bits>(1000, std::forward<Args>(args)...);

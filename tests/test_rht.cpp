@@ -29,8 +29,9 @@ void dispatch() {
 int main() {
     std::cout << "Running RHT Test" << std::endl;
 
-    dispatch<true>();
-    dispatch<false>();
+    test_bits<9, true, 10, DeLI::RhtOptimization::none, true>();
+    /*dispatch<true>();
+    dispatch<false>();*/
 
     std::cout << "Test RHT passed!" << std::endl;
     return 0;

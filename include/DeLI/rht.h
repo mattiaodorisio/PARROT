@@ -13,6 +13,8 @@
 #include "utils.h"
 #include <experimental/simd>
 
+namespace stdx = std::experimental;
+
 namespace DeLI {
     enum class RhtOptimization {
         none,
@@ -40,7 +42,7 @@ namespace DeLI {
         };
 
         std::conditional_t<opt == RhtOptimization::slot_index, TwoLevelBitvector, Stub> slot_bits;
-        std::vector<T> table;
+        utils::AlignedVector<T> table;
         sz_t num_elements;
         sz_t slot_shift;
         sz_t begin_slot; // first slot outside of wrapping area
@@ -53,9 +55,10 @@ namespace DeLI {
         constexpr static T empty_v = std::numeric_limits<T>::max();
         constexpr static T padding = std::numeric_limits<T>::max() - 1;
 
-        using Tvec = std::experimental::native_simd<T>;
-        constexpr static sz_t padding_length = use_simd ? Tvec::size() - 1 : 0;
-        constexpr static sz_t min_table_size = padding_length;
+        using Tvec = stdx::native_simd<T>;
+        constexpr static sz_t simd_unrolled = 2;
+        constexpr static sz_t padding_length = use_simd ? simd_unrolled * Tvec::size() : 0;
+        constexpr static sz_t simd_align_mask = ~(Tvec::size() - 1);
 
         constexpr static bool gap_fill_p =
                 opt == RhtOptimization::gap_fill_predecessor || opt == RhtOptimization::gap_fill_both;
@@ -65,6 +68,10 @@ namespace DeLI {
 
         std::conditional_t<dynamic, std::monostate, std::optional<T>> minV;
         std::conditional_t<dynamic, std::monostate, std::optional<T>> maxV;
+
+        Tvec read_aligned(sz_t slot) const {
+            return Tvec(&table[slot], stdx::vector_aligned);
+        }
 
         bool isValue(T v) const {
             return v < padding;
@@ -87,11 +94,11 @@ namespace DeLI {
         sz_t num_slot_target(sz_t new_num_elements) const {
             sz_t target = new_num_elements == 0 ? 0 : std::bit_ceil(inv_max_load * (new_num_elements + padding_length));
             // ensure at most as many slots as possible values
-            if constexpr (value_bits >= 64 - Tvec::size()) {
+            if constexpr (value_bits >= 64 - padding_length) {
                 return target;
             } else {
                 return std::min(target, std::bit_ceil(
-                        (sz_t(1) << value_bits) + sz_t((use_simd && new_num_elements > 0) ? Tvec::size() : 0)));
+                        (sz_t(1) << value_bits) + sz_t((use_simd && new_num_elements > 0) ? padding_length : 0)));
             }
         }
 
@@ -355,7 +362,7 @@ namespace DeLI {
         * Find successor
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
         */
-        std::optional<T> find_next(T key) const {
+        std::optional<T> find_next(T key) const requires(!use_simd) {
             if (empty()) {
                 return std::nullopt;
             }
@@ -374,6 +381,24 @@ namespace DeLI {
                     return std::nullopt;
             }
             return table[probe];
+        }
+
+        std::optional<T> find_next(T key) const requires(use_simd){
+            if (empty()) {
+                return std::nullopt;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
+            while (true) {
+                Tvec v = read_aligned(probe);
+                if (v[Tvec::size() - 1] == padding)
+                    return std::nullopt;
+                v -= Tvec(key);
+
+                probe = (probe + Tvec::size()) & slot_mask;
+            }
+
         }
 
         /**
