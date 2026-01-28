@@ -7,6 +7,7 @@
 #include <cassert>
 #include <iterator>
 #include <cstdint>
+#include <variant>
 #include "bitvector.h"
 
 #include "utils.h"
@@ -53,6 +54,8 @@ namespace DeLI {
                 opt == RhtOptimization::gap_fill_successor || opt == RhtOptimization::gap_fill_both;
         constexpr static bool use_slot_index = opt == RhtOptimization::slot_index;
 
+        std::conditional_t<dynamic, std::monostate, std::optional<T>> minV;
+        std::conditional_t<dynamic, std::monostate, std::optional<T>> maxV;
 
         void print_table() const {
             for (sz_t i = 0; i < table.size(); ++i) {
@@ -99,7 +102,7 @@ namespace DeLI {
         template<typename It>
         void insert_sorted(It begin, It end) {
             assert(std::is_sorted(begin, end));
-            It begin_2 = begin;
+            It begin_copy = begin;
             sz_t slot_mask = table.size() - 1;
             sz_t next_slot = 0; // points to the next free slot
             while (begin != end) {
@@ -119,13 +122,14 @@ namespace DeLI {
                 }
                 begin++;
             }
+            begin = begin_copy;
             if (next_slot > table.size()) {
                 // we had a wrap around
                 next_slot = next_slot & slot_mask;
                 begin_slot = next_slot;
                 // correct the elements at the beginning that are overwritten due to wrap around
-                while (begin_2 != end) {
-                    T v = *begin_2 & value_mask;
+                while (begin != end) {
+                    T v = *begin & value_mask;
                     if (v != empty_v) {
                         if (scale(v) >= next_slot) {
                             break;
@@ -135,7 +139,7 @@ namespace DeLI {
                         }
                         table[next_slot++] = v;
                     }
-                    begin_2++;
+                    begin++;
                 }
             }
             if (!table.empty()) {
@@ -151,6 +155,12 @@ namespace DeLI {
                             table[i] &= value_mask;
                         }
                     }
+                }
+            }
+            if constexpr (!dynamic) {
+                if(!empty()) {
+                    minV = *begin_copy;
+                    maxV = *(end - 1);
                 }
             }
         }
@@ -287,6 +297,9 @@ namespace DeLI {
         }
 
         inline std::optional<T> min() const {
+            if constexpr (!dynamic) {
+                return minV;
+            }
             if (empty()) {
                 return std::nullopt;
             }
@@ -298,6 +311,9 @@ namespace DeLI {
         }
 
         inline std::optional<T> max() const {
+            if constexpr (!dynamic) {
+                return maxV;
+            }
             if (empty()) {
                 return std::nullopt;
             }

@@ -47,11 +47,11 @@ namespace vEB_tree_impl {
 					mn = inf, mx = -1;
 				} else {
 					int p = map.min();
-					mn = (p << shift) + chd[p].min();
+					mn = (p << shift) + chd[p].minV();
 				}
 			} else if (mx == key) {
 				int p = map.max();
-				mx = (p << shift) + chd[p].max();
+				mx = (p << shift) + chd[p].maxV();
 			}
 		}
 		
@@ -72,12 +72,12 @@ namespace vEB_tree_impl {
 			if (key <= min()) return min();
 			if (max() < key) return -1;
 			int pos = key >> shift;
-			if (map.contains(pos) && mask(key) <= chd[pos].max()) {
+			if (map.contains(pos) && mask(key) <= chd[pos].maxV()) {
 				return (pos << shift) + chd[pos].find_next(mask(key));
 			}
 			int nxt = map.find_next(pos + 1);
 			if (nxt == -1) return -1;
-			return (nxt << shift) + chd[nxt].min();
+			return (nxt << shift) + chd[nxt].minV();
 		}
 		
 		/**
@@ -88,12 +88,12 @@ namespace vEB_tree_impl {
 			if (max() < key) return max();
 			if (key <= min()) return -1;
 			int pos = key >> shift;
-			if (map.contains(pos) && chd[pos].min() < mask(key)) {
+			if (map.contains(pos) && chd[pos].minV() < mask(key)) {
 				return (pos << shift) + chd[pos].find_prev(mask(key));
 			}
 			int nxt = map.find_prev(pos);
 			if (nxt == -1) return -1;
-			return (nxt << shift) + chd[nxt].max();
+			return (nxt << shift) + chd[nxt].maxV();
 		}
 	};
 	
