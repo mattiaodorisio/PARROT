@@ -31,10 +31,12 @@ namespace DeLI {
     private:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
         using sz_t = size_t;
+
         struct Stub {
             Stub(size_t) {
             }
         };
+
         std::conditional_t<opt == RhtOptimization::slot_index, TwoLevelBitvector, Stub> slot_bits;
         std::vector<T> table;
         sz_t num_elements;
@@ -62,7 +64,7 @@ namespace DeLI {
                 if (table[i] == empty_v)
                     std::cout << ". ";
                 else
-                    std::cout << table[i] << " ";
+                    std::cout << utils::to_string(table[i]) << " ";
             }
             std::cout << std::endl;
         }
@@ -87,7 +89,7 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t slot = succ ? begin_slot : (begin_slot - 1);
             T last_highest = std::numeric_limits<T>::max();
-            do {
+            while (true) {
                 slot = (succ ? (slot - 1) : (slot + 1)) & slot_mask;
                 if (table[slot] == empty_v) {
                     if (!alternating || slot % 2 == succ)
@@ -96,7 +98,9 @@ namespace DeLI {
                     if (table[slot] >> value_bits == 0)
                         last_highest = table[slot];
                 }
-            } while (slot != begin_slot);
+                if (!succ && ((slot + 1) & slot_mask) == begin_slot) break;
+                if (succ && slot == begin_slot) break;
+            };
         }
 
         template<typename It>
@@ -158,7 +162,7 @@ namespace DeLI {
                 }
             }
             if constexpr (!dynamic) {
-                if(!empty()) {
+                if (!empty()) {
                     minV = *begin_copy;
                     maxV = *(end - 1);
                 }
@@ -460,13 +464,14 @@ namespace DeLI {
 
             const_iterator &operator++() {
                 assert(index != sz_t(-1));
+                T prev = operator*();
                 while (true) {
                     index = (index + 1) & (rht.table.size() - 1);
                     if (index == rht.begin_slot) {
                         index = sz_t(-1);
                         return *this;
                     }
-                    if (rht.table[index] != empty_v) {
+                    if (rht.table[index] != empty_v && rht.table[index] > prev) {
                         return *this;
                     }
                 };
