@@ -14,10 +14,13 @@ void test_bits() {
 int main() {
     std::cout << "Running RHT Test" << std::endl;
 
+    test_bits<8, true, 127, DeLI::RhtOptimization::slot_index>();
     test_bits<9, true, 127, DeLI::RhtOptimization::none>();
     test_bits<10, false, 127, DeLI::RhtOptimization::gap_fill_predecessor>();
     test_bits<11, false, 127, DeLI::RhtOptimization::gap_fill_successor>();
     test_bits<12, false, 127, DeLI::RhtOptimization::gap_fill_both>();
+    test_bits<13, false, 127, DeLI::RhtOptimization::slot_index>();
+    test_bits<14, false, 127, DeLI::RhtOptimization::none>();
 
     std::cout << "Test RHT passed!" << std::endl;
     return 0;

@@ -7,16 +7,22 @@
 #include <cassert>
 #include <iterator>
 #include <cstdint>
+#include "bitvector.h"
 
 #include "utils.h"
 
 namespace DeLI {
     enum class RhtOptimization {
         none,
-        bit_array,
+        slot_index,
         gap_fill_predecessor,
         gap_fill_successor,
         gap_fill_both
+    };
+
+    struct Stub {
+        Stub(size_t) {
+        }
     };
 
 
@@ -26,12 +32,11 @@ namespace DeLI {
         static_assert(RhtOptimization::gap_fill_successor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_predecessor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_both != opt || !dynamic);
-
-    public:
+    private:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
         using sz_t = size_t; // TODO check, a smaller type should be feasible for us
 
-    private:
+        std::conditional_t<opt == RhtOptimization::slot_index, TwoLevelBitvector, Stub> slot_bits;
         std::vector<T> table;
         sz_t num_elements;
         sz_t slot_shift;
@@ -48,6 +53,7 @@ namespace DeLI {
                 opt == RhtOptimization::gap_fill_predecessor || opt == RhtOptimization::gap_fill_both;
         constexpr static bool gap_fill_s =
                 opt == RhtOptimization::gap_fill_successor || opt == RhtOptimization::gap_fill_both;
+        constexpr static bool use_slot_index = opt == RhtOptimization::slot_index;
 
 
         void print_table() const {
@@ -109,6 +115,9 @@ namespace DeLI {
                         next_slot = slot + 1;
                     }
                     table[slot] = v;
+                    if constexpr (use_slot_index) {
+                        slot_bits.insert(slot);
+                    }
                 }
                 begin++;
             }
@@ -122,6 +131,9 @@ namespace DeLI {
                     if (v != empty_v) {
                         if (scale(v) >= next_slot) {
                             break;
+                        }
+                        if constexpr (use_slot_index) {
+                            slot_bits.insert(next_slot);
                         }
                         table[next_slot++] = v;
                     }
@@ -147,7 +159,8 @@ namespace DeLI {
 
         template<typename It>
         RHT(It begin, It end, sz_t slots) : begin_slot(0), num_elements(0), table(slots, empty_v),
-                                            slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))) {
+                                            slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))),
+                                            slot_bits(slots) {
             insert_sorted(begin, end);
         }
 
@@ -162,7 +175,7 @@ namespace DeLI {
 
     public:
 
-        RHT() : table(0), begin_slot(0), slot_shift(0), num_elements(0) {
+        RHT() : table(0), begin_slot(0), slot_shift(0), num_elements(0), slot_bits(0) {
         }
 
         template<typename It>
@@ -199,6 +212,9 @@ namespace DeLI {
                 probe = (probe + 1) & slot_mask;
             }
             table[probe] = key;
+            if constexpr (use_slot_index) {
+                slot_bits.insert(probe);
+            }
             ++num_elements;
             if (probe < start_probe) // wrapped around
                 begin_slot++;
@@ -229,6 +245,9 @@ namespace DeLI {
                 sz_t next_probe = (probe + 1) & slot_mask;
                 if (table[next_probe] == empty_v || scale(table[next_probe]) == next_probe) {
                     table[probe] = empty_v;
+                    if constexpr (use_slot_index) {
+                        slot_bits.remove(probe);
+                    }
                     break;
                 }
                 table[probe] = table[next_probe];
@@ -316,7 +335,14 @@ namespace DeLI {
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
-            while (table[probe] == empty_v || table[probe] < key) {
+            bool inGap;
+            while ((inGap = table[probe] == empty_v) || table[probe] < key) {
+                if constexpr (use_slot_index) {
+                    if (inGap) {
+                        std::optional<T> res = slot_bits.find_next(probe);
+                        return res.has_value() ? table[res.value()] : std::optional<T>{};
+                    }
+                }
                 probe = (probe + 1) & slot_mask;
                 if (probe == begin_slot)
                     return std::nullopt;
@@ -337,20 +363,34 @@ namespace DeLI {
             sz_t probe = std::max(begin_slot, scale(key));
 
             if (table[probe] >= key || table[probe] == empty_v) {
-                // probe towards left
-                do {
-                    if (probe == begin_slot)
+                if constexpr (use_slot_index) {
+                    // skip towards left
+                    std::optional<T> res;
+                    if (probe <= begin_slot || !(res = slot_bits.find_prev(probe - 1)).has_value() ||
+                        res.value() < begin_slot) {
                         return std::nullopt;
-                    probe = (probe - 1) & slot_mask;
-                } while (table[probe] >= key);
-                return table[probe];
-            } else {
-                // probe towards right
-                while (table[(probe + 1) & slot_mask] < key && table[(probe + 1) & slot_mask] != empty_v &&
-                       ((probe + 1) & slot_mask) != begin_slot) {
-                    probe = (probe + 1) & slot_mask;
+                    }
+                    return table[res.value()];
+                } else {
+                    // probe towards left
+                    do {
+                        if (probe == begin_slot)
+                            return std::nullopt;
+                        probe = (probe - 1) & slot_mask;
+                    } while (table[probe] >= key);
+                    return table[probe];
                 }
-                // step back to get the predecessor
+            } else {
+                // cluster, probe towards right
+                while (true) {
+                    auto next = (probe + 1) & slot_mask;
+                    if (table[next] >= key ||
+                        table[next] == empty_v ||
+                        next == begin_slot) {
+                        break;
+                    }
+                    probe = next;
+                }
                 return table[probe];
             }
         }

@@ -1,134 +1,214 @@
 #pragma once
 
+
 #include <vector>
-#include <stdexcept>
-#include <limits>
-#include <algorithm>
-#include <cassert>
-#include <iterator>
 #include <cstdint>
+#include <cstddef>
+#include <optional>
+#include <stdexcept>
+#include <iostream>
+#include <cassert>
 
 namespace DeLI {
-  
-  class bitvector {
-    using sz_t = size_t;
-    
-    std::vector<uint64_t> vector;
-    sz_t num_bits;
-    
+    class TwoLevelBitvector {
     public:
-    bitvector() : num_bits(0) {}
-    
-    bitvector(sz_t size) : num_bits(size) {
-      vector.resize((size + 63) / 64, 0);
-    }
-    
-    void resize(sz_t size) {
-      num_bits = size;
-      vector.resize((size + 63) / 64, 0);
-    }
-    
-    void set(sz_t index) {
-      vector[index / 64] |= (1ULL << (index % 64));
-    }
-    
-    bool get(sz_t index) const {
-      return (vector[index / 64] >> (index % 64)) & 1ULL;
-    }
-    
-    void clear(sz_t index) {
-      vector[index / 64] &= ~(1ULL << (index % 64));
-    }
-    
-    sz_t find_next_set(sz_t index) const {
-      // TODO: check if we can do better (avx simd)
-      sz_t vec_index = index / 64;
-      sz_t bit_index = index % 64;
-      
-      // Check the current 64-bit block
-      uint64_t block = vector[vec_index] >> bit_index;
-      if (block != 0) {
-        return index + __builtin_ctzll(block);
-      }
-      
-      // Check subsequent blocks
-      for (sz_t i = vec_index + 1; i < vector.size(); ++i) {
-        if (vector[i] != 0) {
-          return i * 64 + __builtin_ctzll(vector[i]);
+        using word_t = uint64_t;
+        static constexpr unsigned WORD_BITS = sizeof(word_t) * 8;
+
+        // Construct with capacity bits (will allocate enough words).
+        explicit TwoLevelBitvector(size_t capacity_bits = 0) {
+            resize(capacity_bits);
         }
-      }
-      
-      return num_bits; // No set bit found
-    }
-    
-    void free_memory() {
-      vector.clear();
-      vector.shrink_to_fit();
-      num_bits = 0;
-    }
-  };
-  
-  // XOR bitvector
-  // This take an arbitrary vector and creates a two layer bitvector that has bit set for non-empty blocks
-  template <typename T, T zero_value, size_t block_size = 64>
-  class xor_bitvector {
-    using sz_t = size_t;
-    
-    bitvector top_level;
-    bitvector bottom_level;
-    sz_t num_elements;
-    
-    public:
-    xor_bitvector() : num_elements(0) {}
-    
-    template <typename It>
-    void build(const It begin, const It end) {
-      num_elements = std::distance(begin, end);
-      sz_t num_blocks = (num_elements + block_size - 1) / block_size;
-      top_level.resize(num_blocks);
-      bottom_level.resize(num_elements);
-      
-      // TODO XXX: improve it (word operations, simd, etc.)
-      for (sz_t i = 0; i < num_elements; ++i) {
-        if (begin[i] != zero_value) {
-          bottom_level.set(i);
-          top_level.set(i / block_size);
+
+        // Resize to at least capacity_bits (bits). Existing bits are preserved when increasing.
+        void resize(size_t capacity_bits) {
+            size_t needed_words = (capacity_bits + WORD_BITS - 1) / WORD_BITS;
+            if (needed_words <= data_words()) return;
+            // resize data words
+            data_.resize(needed_words, 0);
+            // ensure top words cover needed_words words (top has one bit per data-word)
+            size_t needed_top_bits = needed_words;
+            size_t needed_top_words = (needed_top_bits + WORD_BITS - 1) / WORD_BITS;
+            top_.resize(needed_top_words, 0);
         }
-      }
-    }
-    
-    sz_t find_next_set(sz_t index) const {
-      sz_t block_index = index / block_size;
-      sz_t within_block_index = index % block_size;
-      
-      // Find the next block with a non-zero element
-      sz_t next_block = top_level.find_next_set(block_index);
-      if (next_block >= (num_elements + block_size - 1) / block_size) {
-        return num_elements; // No more non-zero elements
-      }
-      
-      // Now find the next non-zero element within that block
-      sz_t start_index = next_block * block_size;
-      if (next_block == block_index) {
-        start_index += within_block_index;
-      }
-      
-      return bottom_level.find_next_set(start_index);
-    }
-    
-    void set(sz_t index) {
-      bottom_level.set(index);
-      top_level.set(index / block_size);
-    }
-    
-    bool get(sz_t index) const {
-      return bottom_level.get(index);
-    }
-    
-    void free_memory() {
-      top_level.free_memory();
-      bottom_level.free_memory();
-      num_elements = 0;
-    }
-  };
+
+        // set bit at pos (0-based)
+        void insert(size_t pos) {
+            ensure_capacity_for(pos);
+            size_t widx = pos >> 6;
+            unsigned b = pos & 63;
+            word_t old = data_[widx];
+            data_[widx] |= (word_t(1) << b);
+            if (old == 0) // transition 0 -> non-zero: set top bit
+                set_top_bit(widx);
+        }
+
+        // clear bit at pos
+        void remove(size_t pos) {
+            if (pos / WORD_BITS >= data_words()) return; // out of range: already zero
+            size_t widx = pos >> 6;
+            unsigned b = pos & 63;
+            data_[widx] &= ~(word_t(1) << b);
+            if (data_[widx] == 0) // transition to zero: clear top bit
+                clear_top_bit(widx);
+        }
+
+        // test bit at pos
+        bool contains(size_t pos) const {
+            if (pos / WORD_BITS >= data_words()) return false;
+            size_t widx = pos >> 6;
+            unsigned b = pos & 63;
+            return (data_[widx] >> b) & 1ULL;
+        }
+
+        // predecessor: greatest set bit <= pos. returns std::nullopt if none.
+        std::optional<size_t> find_prev(size_t pos) const {
+            assert(pos <= (data_words() * WORD_BITS) - 1);
+            size_t widx = pos >> 6;
+            unsigned b = pos & 63;
+
+            // mask bits <= b in the same word
+            word_t w = data_[widx] & ((b == 63) ? ~word_t(0) : ((word_t(1) << (b + 1)) - 1ULL));
+            if (w) [[likely]] {
+                unsigned msb = msb_index(w);
+                return (widx << 6) + msb;
+            }
+
+            // find previous non-empty data-word by checking top level bits
+            // look for set top bits for word indices < widx
+            if (widx == 0) return std::nullopt;
+            size_t top_bit_idx = widx; // top bit index we need strictly < widx
+            size_t top_word_idx = (top_bit_idx - 1) >> 6;
+            unsigned in_word_bit = (top_bit_idx - 1) & 63;
+
+            // mask top word bits <= in_word_bit
+            word_t topw =
+                    top_[top_word_idx] & ((in_word_bit == 63) ? ~word_t(0) : ((word_t(1) << (in_word_bit + 1)) - 1ULL));
+            while (true) {
+                if (topw) {
+                    unsigned top_msb = msb_index(topw);
+                    size_t prev_data_widx = (top_word_idx << 6) + top_msb;
+                    // find msb in that data word
+                    assert(prev_data_widx < data_words());
+                    word_t dw = data_[prev_data_widx];
+                    unsigned msb_dw = msb_index(dw);
+                    return (prev_data_widx << 6) + msb_dw;
+                }
+                if (top_word_idx == 0) break;
+                --top_word_idx;
+                topw = top_[top_word_idx];
+            }
+            return std::nullopt;
+        }
+
+        // successor: smallest set bit >= pos. returns std::nullopt if none.
+        std::optional<size_t> find_next(size_t pos) const {
+            assert(pos <= (data_words() * WORD_BITS) - 1);
+            size_t widx = pos >> 6;
+            unsigned b = pos & 63;
+
+            // mask bits >= b in same word
+            word_t w = data_[widx] & ~((word_t(1) << b) - 1ULL);
+            if (w) [[likely]] {
+                unsigned lsb = lsb_index(w);
+                return (widx << 6) + lsb;
+            }
+
+            // find next non-empty data-word by checking top level bits > widx
+            size_t top_bit_idx = widx + 1;
+            size_t top_word_idx = top_bit_idx >> 6;
+            unsigned in_word_bit = top_bit_idx & 63;
+
+            // mask top word bits >= in_word_bit
+            if (top_word_idx < top_words()) {
+                word_t topw = top_[top_word_idx] & (~((in_word_bit == 0) ? 0ULL : ((word_t(1) << in_word_bit) - 1ULL)));
+                while (true) {
+                    if (topw) {
+                        unsigned top_lsb = lsb_index(topw);
+                        size_t nxt_data_widx = (top_word_idx << 6) + top_lsb;
+                        if (nxt_data_widx >= data_words()) return std::nullopt;
+                        word_t dw = data_[nxt_data_widx];
+                        unsigned lsb_dw = lsb_index(dw);
+                        return (nxt_data_widx << 6) + lsb_dw;
+                    }
+                    ++top_word_idx;
+                    if (top_word_idx >= top_words()) break;
+                    topw = top_[top_word_idx];
+                }
+            }
+            return std::nullopt;
+        }
+
+        // number of words holding data
+        size_t data_words() const { return data_.size(); }
+
+        // number of top words
+        size_t top_words() const { return top_.size(); }
+
+        void clear() {
+            TwoLevelBitvector replace(data_words() * WORD_BITS);
+            std::swap(*this, replace);
+        }
+
+        template<typename It>
+        void bulk_load(It begin, It end) {
+            while (begin != end) {
+                insert(*begin);
+                begin++;
+            }
+        }
+
+    private:
+        std::vector<word_t> data_; // data words storing actual bits
+        std::vector<word_t> top_;  // top-level words: each bit corresponds to whether a data_ word is non-zero
+
+        // ensure capacity for bit pos
+        void ensure_capacity_for(size_t pos) {
+            size_t need_words = (pos >> 6) + 1;
+            if (need_words > data_words()) {
+                data_.resize(need_words, 0);
+                size_t needed_top_bits = need_words;
+                size_t needed_top_words = (needed_top_bits + WORD_BITS - 1) / WORD_BITS;
+                top_.resize(needed_top_words, 0);
+            }
+        }
+
+        // set/clear top bit for given data word index
+        void set_top_bit(size_t data_word_index) {
+            size_t tidx = data_word_index >> 6;
+            unsigned tbit = data_word_index & 63;
+            top_[tidx] |= (word_t(1) << tbit);
+        }
+
+        void clear_top_bit(size_t data_word_index) {
+            size_t tidx = data_word_index >> 6;
+            unsigned tbit = data_word_index & 63;
+            top_[tidx] &= ~(word_t(1) << tbit);
+        }
+
+        // find index (0..63) of least-significant 1-bit; undefined if x==0
+        static unsigned lsb_index(word_t x) {
+#if defined(__GNUG__) || defined(__clang__)
+            return static_cast<unsigned>(__builtin_ctzll(x));
+#else
+            // fallback (slower)
+        unsigned i = 0;
+        while ((x & 1ULL) == 0) { x >>= 1; ++i; }
+        return i;
+#endif
+        }
+
+        // find index (0..63) of most-significant 1-bit; undefined if x==0
+        static unsigned msb_index(word_t x) {
+#if defined(__GNUG__) || defined(__clang__)
+            return static_cast<unsigned>(63 - __builtin_clzll(x));
+#else
+            unsigned i = 63;
+        while ((x >> i & 1ULL) == 0) --i;
+        return i;
+#endif
+        }
+    };
+
+
 };
