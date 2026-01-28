@@ -102,19 +102,27 @@ namespace DeLI {
         T find_next(T key) const {
             assert(key != empty_v);
 
-            /*sz_t probe = get_slot(key);
+            sz_t probe = get_slot(key);
+            /*do {
+                T chunk1 = table[probe/block_size][probe%block_size]; probe++;
+                if (chunk1 > key) {
+                    return chunk1;
+                }
+            } while(probe < table.size()*block_size);
+            return empty_v;*/
+
             while (probe < table.size()*block_size) {
                 T chunk1 = table[probe/block_size][probe%block_size] - (key + 1); probe++;
                 T chunk2 = table[probe/block_size][probe%block_size] - (key + 1); probe++;
-                T chunk3 = table[probe/block_size][probe%block_size] - (key + 1); probe++;
-                T chunk = std::min({ chunk3,chunk2, chunk1});
+                //T chunk3 = table[probe/block_size][probe%block_size] - (key + 1); probe++;
+                T chunk = std::min({ chunk2, chunk1});
                 T min_val = chunk + (key +1);
                 if (min_val > key) [[likely]]{
                     return min_val;
                 }
             }
-            return std::optional<T>();*/
-            sz_t slot=get_slot(key);
+            return empty_v;
+            /*sz_t slot=get_slot(key);
             if (non_empty_slots.get(slot)) {
                 sz_t probe = slot / block_size;
                 assert(probe < table.size() - unrolled_blocks);
@@ -131,7 +139,7 @@ namespace DeLI {
             } else {
                 slot = non_empty_slots.next_set(slot);
                 return table[slot/block_size][slot%block_size];
-            }
+            }*/
         }
     };
 
