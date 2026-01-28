@@ -149,6 +149,7 @@ void runForN(const int N, Args &&... args) {
     if constexpr (requires(T t){ v.begin(); }) {
         std::set<T> iterated;
         for (auto it = v.begin(); it != v.end(); ++it) {
+            check(!iterated.contains(*it)); // check no duplicates
             iterated.insert(*it);
         }
         check(iterated == model);

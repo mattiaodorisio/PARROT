@@ -202,8 +202,8 @@ namespace DeLI {
                     res = top_level[high].successor;
                     return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
                 }
-            } else if constexpr (use_bucket_index){
-                if(!res && high + 1 < buckets) {
+            } else if constexpr (use_bucket_index) {
+                if (!res && high + 1 < buckets) {
                     std::optional<inner_t> next_bucket = bucket_bits.find_next(high + 1);
                     if (next_bucket) {
                         res = top_level[next_bucket.value()].rht.min();
@@ -235,8 +235,8 @@ namespace DeLI {
                     res = top_level[high].predecessor;
                     return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
                 }
-            }  else if constexpr (use_bucket_index){
-                if(!res && high > 0) {
+            } else if constexpr (use_bucket_index) {
+                if (!res && high > 0) {
                     std::optional<inner_t> next_bucket = bucket_bits.find_prev(high - 1);
                     if (next_bucket) {
                         res = top_level[next_bucket.value()].rht.max();
@@ -304,11 +304,29 @@ namespace DeLI {
             InnerIt inner_it;
 
             void advance_to_valid() {
-                // ToDo: add bucket index optimizations
-                const std::size_t N = parent.top_level.size();
-                while (outer_idx + 1 < N && inner_it == parent.top_level[outer_idx].rht.end()) {
-                    ++outer_idx;
-                    inner_it = parent.top_level[outer_idx].rht.begin();
+                if constexpr (use_bucket_index || prec_pred_succ) {
+                    if(outer_idx + 1 < parent.top_level.size() && inner_it == parent.top_level[outer_idx].rht.end()) {
+                        std::optional<inner_t> next_bucket;
+                        if constexpr (use_bucket_index) {
+                            next_bucket = parent.bucket_bits.find_next(outer_idx + 1);
+                        } else if constexpr (prec_pred_succ) {
+                            std::optional<inner_t> nextV = parent.top_level[outer_idx].successor;
+                            next_bucket = nextV.has_value() ? std::optional<inner_t>(parent.getBucket(nextV.value())) : std::nullopt;
+                        }
+                        if (next_bucket) {
+                            outer_idx = next_bucket.value();
+                            inner_it = parent.top_level[outer_idx].rht.begin();
+                        } else {
+                            // reached the end
+                            outer_idx = parent.top_level.size() - 1;
+                            inner_it = parent.top_level[outer_idx].rht.end();
+                        }
+                    }
+                } else {
+                    while (outer_idx + 1 < parent.top_level.size() && inner_it == parent.top_level[outer_idx].rht.end()) {
+                        ++outer_idx;
+                        inner_it = parent.top_level[outer_idx].rht.begin();
+                    }
                 }
             }
         };
