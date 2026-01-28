@@ -329,15 +329,6 @@ namespace DeLI {
             return table[probe];
         }
 
-        size_t d_size() {
-            size_t cnt = 0;
-            for (int i = 0; i < table.size(); ++i) {
-                if (table[i] != empty_v)
-                    cnt++;
-            }
-            return cnt;
-        }
-
         size_t size() const {
             return num_elements;
         }
@@ -426,9 +417,12 @@ namespace DeLI {
 
 
         class const_iterator {
+        private:
+            friend class RHT;
             sz_t index;
             const RHT &rht;
-        public:
+            const_iterator(sz_t index, const RHT &rht_ref) : index(index), rht(rht_ref) {}
+
             const_iterator(bool begin, const RHT &rht_ref) : rht(rht_ref) {
                 if (!begin || rht.empty()) {
                     index = sz_t(-1);
@@ -444,6 +438,7 @@ namespace DeLI {
                 }
             }
 
+        public:
             const_iterator(const const_iterator &other) : index(other.index), rht(other.rht) {}
 
             const_iterator(const_iterator &&other) noexcept: index(other.index), rht(other.rht) {}
