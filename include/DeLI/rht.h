@@ -20,11 +20,6 @@ namespace DeLI {
         gap_fill_both
     };
 
-    struct Stub {
-        Stub(size_t) {
-        }
-    };
-
 
     template<bool dynamic, unsigned int value_bits, RhtOptimization opt>
     class RHT {
@@ -34,8 +29,11 @@ namespace DeLI {
         static_assert(RhtOptimization::gap_fill_both != opt || !dynamic);
     private:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
-        using sz_t = size_t; // TODO check, a smaller type should be feasible for us
-
+        using sz_t = size_t;
+        struct Stub {
+            Stub(size_t) {
+            }
+        };
         std::conditional_t<opt == RhtOptimization::slot_index, TwoLevelBitvector, Stub> slot_bits;
         std::vector<T> table;
         sz_t num_elements;

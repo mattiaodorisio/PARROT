@@ -34,7 +34,7 @@ namespace DeLI {
 
         // set bit at pos (0-based)
         void insert(size_t pos) {
-            ensure_capacity_for(pos);
+            assert(pos < data_words() * WORD_BITS);
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
             word_t old = data_[widx];
@@ -45,7 +45,7 @@ namespace DeLI {
 
         // clear bit at pos
         void remove(size_t pos) {
-            if (pos / WORD_BITS >= data_words()) return; // out of range: already zero
+            assert(pos < data_words() * WORD_BITS);
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
             data_[widx] &= ~(word_t(1) << b);
@@ -55,7 +55,7 @@ namespace DeLI {
 
         // test bit at pos
         bool contains(size_t pos) const {
-            if (pos / WORD_BITS >= data_words()) return false;
+            assert(pos < data_words() * WORD_BITS);
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
             return (data_[widx] >> b) & 1ULL;
@@ -63,7 +63,7 @@ namespace DeLI {
 
         // predecessor: greatest set bit <= pos. returns std::nullopt if none.
         std::optional<size_t> find_prev(size_t pos) const {
-            assert(pos <= (data_words() * WORD_BITS) - 1);
+            assert(pos < data_words() * WORD_BITS);
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
 
@@ -103,7 +103,7 @@ namespace DeLI {
 
         // successor: smallest set bit >= pos. returns std::nullopt if none.
         std::optional<size_t> find_next(size_t pos) const {
-            assert(pos <= (data_words() * WORD_BITS) - 1);
+            assert(pos < data_words() * WORD_BITS);
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
 
@@ -162,16 +162,6 @@ namespace DeLI {
         std::vector<word_t> data_; // data words storing actual bits
         std::vector<word_t> top_;  // top-level words: each bit corresponds to whether a data_ word is non-zero
 
-        // ensure capacity for bit pos
-        void ensure_capacity_for(size_t pos) {
-            size_t need_words = (pos >> 6) + 1;
-            if (need_words > data_words()) {
-                data_.resize(need_words, 0);
-                size_t needed_top_bits = need_words;
-                size_t needed_top_words = (needed_top_bits + WORD_BITS - 1) / WORD_BITS;
-                top_.resize(needed_top_words, 0);
-            }
-        }
 
         // set/clear top bit for given data word index
         void set_top_bit(size_t data_word_index) {

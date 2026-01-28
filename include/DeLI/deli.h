@@ -10,32 +10,43 @@
 #include "veb.h"
 #include "rht.h"
 
-namespace DeLI { //ToDo: offset value in buckets
+namespace DeLI {
 
-    template<bool dynamic, size_t low_bits, typename inner_t, RhtOptimization opt>
-    struct bucket;
 
-    template<size_t low_bits, typename inner_t, RhtOptimization opt>
-    struct bucket<true, low_bits, inner_t, opt> {
-        RHT<true, low_bits, opt> rht;
+    enum class TopLevelOptimization {
+        none,
+        precompute,
+        bucket_index
     };
 
-    template<size_t low_bits, typename inner_t, RhtOptimization opt>
-    struct bucket<false, low_bits, inner_t, opt> {
-        RHT<false, low_bits, opt> rht;
-        std::optional<inner_t> predecessor;
-        std::optional<inner_t> successor;
-    };
-
-    template<bool dynamic, RhtOptimization opt, typename T, unsigned int high_bits, unsigned int value_bits = sizeof(T) * CHAR_BIT>
+    template<bool dynamic, RhtOptimization rht_opt, TopLevelOptimization opt, typename T, unsigned int high_bits, unsigned int value_bits =
+    sizeof(T) * CHAR_BIT>
     class DeLI {
         static_assert(value_bits < 128);
         static_assert(sizeof(T) * CHAR_BIT >= value_bits);
         static_assert(value_bits >= high_bits);
+        static_assert(TopLevelOptimization::precompute != opt || !dynamic);
     private:
         using inner_t = utils::uint_by_bits_t<value_bits>;
         static constexpr size_t low_bits = value_bits - high_bits;
         static constexpr size_t buckets = size_t(1) << high_bits;
+        static constexpr bool prec_pred_succ = TopLevelOptimization::precompute == opt;
+        static constexpr bool use_bucket_index = TopLevelOptimization::bucket_index == opt;
+
+        template<bool precompute, typename RHT_t>
+        struct bucket;
+
+        template<typename RHT_t>
+        struct bucket<false, RHT_t> {
+            RHT_t rht;
+        };
+
+        template<typename RHT_t>
+        struct bucket<true, RHT_t> {
+            RHT_t rht;
+            std::optional<inner_t> predecessor;
+            std::optional<inner_t> successor;
+        };
 
         inner_t getBucket(inner_t key) const {
             return utils::safe_shr(key, low_bits);
@@ -45,10 +56,17 @@ namespace DeLI { //ToDo: offset value in buckets
             return utils::safe_shl(high, low_bits) | low;
         }
 
+        struct Stub {
+            Stub(size_t) {
+            }
+        };
+
+        std::vector<bucket<prec_pred_succ, RHT<dynamic, low_bits, rht_opt>>> top_level;
+        std::conditional_t<use_bucket_index, TwoLevelBitvector, Stub> bucket_bits;
     public:
 
-        DeLI() {
-            top_level.resize(buckets);
+        DeLI() : bucket_bits(buckets), top_level(buckets) {
+            ;
         }
 
 
@@ -65,14 +83,14 @@ namespace DeLI { //ToDo: offset value in buckets
             auto bucket_start = inner_iter.begin();
             inner_t current_high = getBucket(*bucket_start);
             size_t keys_in_bucket = 0;
-            std::vector<std::optional<inner_t>> bucketMaxs(dynamic ? 0 : buckets, std::nullopt);
-            std::vector<std::optional<inner_t>> bucketMins(dynamic ? 0 : buckets, std::nullopt);
+            std::vector<std::optional<inner_t>> bucketMaxs(prec_pred_succ ? buckets : 0, std::nullopt);
+            std::vector<std::optional<inner_t>> bucketMins(prec_pred_succ ? buckets : 0, std::nullopt);
             for (auto it = inner_iter.begin(); it != inner_iter.end(); ++it) {
                 inner_t high = getBucket(*it);
                 if (high != current_high) {
                     // Bulk load the current bucket
                     top_level[current_high].rht.bulk_load(bucket_start, it, keys_in_bucket);
-                    if constexpr (!dynamic) {
+                    if constexpr (prec_pred_succ) {
                         if (bucket_start != it) {
                             bucketMins[current_high] = *bucket_start;
                             bucketMaxs[current_high] = *(it - 1);
@@ -85,7 +103,7 @@ namespace DeLI { //ToDo: offset value in buckets
                 keys_in_bucket++;
             }
             top_level[current_high].rht.bulk_load(bucket_start, inner_iter.end(), keys_in_bucket);
-            if constexpr (!dynamic) {
+            if constexpr (prec_pred_succ) {
                 if (bucket_start != inner_iter.end()) {
                     bucketMins[current_high] = *bucket_start;
                     bucketMaxs[current_high] = *(inner_iter.end() - 1);
@@ -111,11 +129,22 @@ namespace DeLI { //ToDo: offset value in buckets
                     }
                 }
             }
+            if constexpr (use_bucket_index) {
+                bucket_bits.clear();
+                for (size_t b = 0; b < buckets; ++b) {
+                    if (!top_level[b].rht.empty()) {
+                        bucket_bits.insert(b);
+                    }
+                }
+            }
         }
 
         bool insert(T key_) requires(dynamic) {
             inner_t key = utils::to_uint<T, inner_t>(key_);
             inner_t high = getBucket(key);
+            if constexpr (use_bucket_index) {
+                bucket_bits.insert(high);
+            }
             return top_level[high].rht.insert(key);
         }
 
@@ -124,7 +153,12 @@ namespace DeLI { //ToDo: offset value in buckets
         bool remove(T key_) requires(dynamic) {
             inner_t key = utils::to_uint<T, inner_t>(key_);
             inner_t high = getBucket(key);
-            return top_level[high].rht.remove(key);
+            bool success = top_level[high].rht.remove(key);
+            if constexpr (use_bucket_index) {
+                if (success && top_level[high].rht.empty())
+                    bucket_bits.remove(high);
+            }
+            return success;
         }
 
         bool remove(T key_) requires(!dynamic) = delete;
@@ -138,6 +172,9 @@ namespace DeLI { //ToDo: offset value in buckets
         void clear() requires(dynamic) {
             for (auto &b: top_level) {
                 b.rht.clear();
+            }
+            if constexpr (use_bucket_index) {
+                bucket_bits.clear();
             }
         }
 
@@ -160,14 +197,22 @@ namespace DeLI { //ToDo: offset value in buckets
             inner_t high = getBucket(key);
             std::optional<inner_t> res = top_level[high].rht.find_next(key);
 
-            if constexpr (dynamic) {
-                while (!res && ++high < buckets) {
-                    res = top_level[high].rht.min();
-                }
-            } else {
+            if constexpr (prec_pred_succ) {
                 if (!res) {
                     res = top_level[high].successor;
                     return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
+                }
+            } else if constexpr (use_bucket_index){
+                if(!res && high + 1 < buckets) {
+                    std::optional<inner_t> next_bucket = bucket_bits.find_next(high + 1);
+                    if (next_bucket) {
+                        res = top_level[next_bucket.value()].rht.min();
+                        high = next_bucket.value();
+                    }
+                }
+            } else {
+                while (!res && ++high < buckets) {
+                    res = top_level[high].rht.min();
                 }
             }
 
@@ -182,16 +227,25 @@ namespace DeLI { //ToDo: offset value in buckets
         std::optional<T> find_prev(T key_) const {
             inner_t key = utils::to_uint<T, inner_t>(key_);
             inner_t high = getBucket(key);
+
             std::optional<inner_t> res = top_level[high].rht.find_prev(key);
 
-            if constexpr (dynamic) {
-                while (!res && high-- > 0) {
-                    res = top_level[high].rht.max();
-                }
-            } else {
+            if constexpr (prec_pred_succ) {
                 if (!res) {
                     res = top_level[high].predecessor;
                     return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
+                }
+            }  else if constexpr (use_bucket_index){
+                if(!res && high > 0) {
+                    std::optional<inner_t> next_bucket = bucket_bits.find_prev(high - 1);
+                    if (next_bucket) {
+                        res = top_level[next_bucket.value()].rht.max();
+                        high = next_bucket.value();
+                    }
+                }
+            } else {
+                while (!res && high-- > 0) {
+                    res = top_level[high].rht.max();
                 }
             }
 
@@ -199,12 +253,8 @@ namespace DeLI { //ToDo: offset value in buckets
                        : std::nullopt;
         }
 
-    private:
-        std::vector<bucket<dynamic, low_bits, inner_t, opt>> top_level;
 
-        // Iterator implementation
-    public:
-        using inner_const_iterator = typename RHT<dynamic, low_bits, opt>::const_iterator;
+        using inner_const_iterator = typename RHT<dynamic, low_bits, rht_opt>::const_iterator;
 
         template<typename InnerIt>
         class iterator_base {
@@ -254,6 +304,7 @@ namespace DeLI { //ToDo: offset value in buckets
             InnerIt inner_it;
 
             void advance_to_valid() {
+                // ToDo: add bucket index optimizations
                 const std::size_t N = parent.top_level.size();
                 while (outer_idx + 1 < N && inner_it == parent.top_level[outer_idx].rht.end()) {
                     ++outer_idx;
