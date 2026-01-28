@@ -25,9 +25,12 @@ namespace DeLI {
     };
 
 
-    template<bool dynamic, unsigned int value_bits, RhtOptimization opt, bool use_simd>
+    template<bool dynamic, unsigned int value_bits, RhtOptimization opt, size_t simd_unrolled, size_t max_load_perc>
     class RHT {
+        constexpr static bool use_simd = simd_unrolled > 0;
         static_assert(value_bits < 128);
+        static_assert(max_load_perc < 100);
+        static_assert(max_load_perc > 0);
         static_assert(RhtOptimization::gap_fill_successor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_predecessor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_both != opt || !dynamic);
@@ -47,7 +50,8 @@ namespace DeLI {
         sz_t slot_shift;
         sz_t begin_slot; // first slot outside of wrapping area
 
-        constexpr static sz_t inv_max_load = 2;
+        constexpr static sz_t load_shifter = 16;
+        constexpr static sz_t inv_max_load = sz_t(double((size_t(100)<<load_shifter)) / double(max_load_perc));
         constexpr static sz_t shrink_threshold = 4;
         constexpr static T value_mask = utils::safe_shl(T(1), value_bits) - 1;
 
@@ -56,8 +60,7 @@ namespace DeLI {
         constexpr static T padding = std::numeric_limits<T>::max() - 1;
 
         using Tvec = stdx::native_simd<T>;
-        constexpr static sz_t simd_unrolled = 2;
-        constexpr static sz_t padding_length = use_simd ? simd_unrolled * Tvec::size() : 0;
+        constexpr static sz_t padding_length = simd_unrolled * Tvec::size();
         constexpr static sz_t simd_align_mask = ~(Tvec::size() - 1);
 
         constexpr static bool gap_fill_p =
@@ -92,7 +95,7 @@ namespace DeLI {
         }
 
         sz_t num_slot_target(sz_t new_num_elements) const {
-            sz_t target = new_num_elements == 0 ? 0 : std::bit_ceil(inv_max_load * (new_num_elements + padding_length));
+            sz_t target = new_num_elements == 0 ? 0 : std::bit_ceil((inv_max_load * (new_num_elements + padding_length)) >> load_shifter);
             // ensure at most as many slots as possible values
             if constexpr (value_bits >= 64 - padding_length) {
                 return target;
@@ -110,7 +113,8 @@ namespace DeLI {
             while (true) {
                 slot = (succ ? (slot - 1) : (slot + 1)) & slot_mask;
                 if (occupied_slots[slot]) {
-                    last_highest = table[slot];
+                    if (table[slot] != padding)
+                        last_highest = table[slot];
                 } else {
                     if (!alternating || slot % 2 == succ)
                         table[slot] = last_highest;
@@ -123,11 +127,6 @@ namespace DeLI {
         template<typename It>
         void insert_sorted(It begin, It end) {
             assert(std::is_sorted(begin, end));
-            if (begin == end) {
-                begin_slot = 0;
-                return;
-            }
-
             It begin_copy = begin;
             sz_t slot_mask = table.size() - 1;
             sz_t next_slot = 0; // points to the next free slot
@@ -155,10 +154,12 @@ namespace DeLI {
                 next_slot = 0;
             }
             if constexpr (use_simd) {
-                for (sz_t i = 0; i < padding_length; ++i) {
-                    sz_t slot = (next_slot++) & slot_mask;
-                    occupied_slots[slot] = true;
-                    table[slot] = padding;
+                if (!table.empty()) {
+                    for (sz_t i = 0; i < padding_length; ++i) {
+                        sz_t slot = (next_slot++) & slot_mask;
+                        occupied_slots[slot] = true;
+                        table[slot] = padding;
+                    }
                 }
             }
             begin_slot = next_slot;
@@ -201,7 +202,7 @@ namespace DeLI {
 
         void ensure_scaling(sz_t new_num_elements) {
             sz_t slot_target = num_slot_target(new_num_elements);
-            if (table.size() >= slot_target && table.size() <= slot_target * shrink_threshold) {
+            if (table.size() >= slot_target && table.size() < slot_target * shrink_threshold) {
                 return;
             }
             RHT reseized = RHT(begin(), end(), slot_target);
@@ -391,10 +392,33 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
             while (true) {
-                Tvec v = read_aligned(probe);
-                if (v[Tvec::size() - 1] == padding)
+                Tvec last;
+                Tvec v1 = read_aligned(probe);
+                Tvec combined = v1 - Tvec(key);
+                if constexpr (simd_unrolled > 1) {
+                    probe = (probe + Tvec::size()) & slot_mask;
+                    Tvec v2 = read_aligned(probe);
+                    combined = stdx::min(combined, v2 - Tvec(key));
+                    if constexpr (simd_unrolled > 2) {
+                        probe = (probe + Tvec::size()) & slot_mask;
+                        Tvec v3 = read_aligned(probe);
+                        combined = stdx::min(combined, v3 - Tvec(key));
+                        last = v3;
+                        static_assert(simd_unrolled <= 3);
+                    } else {
+                        last = v2;
+                    }
+                } else {
+                    last = v1;
+                }
+                bool in_padding = last[Tvec::size() - 1] == padding;
+                T min_val = stdx::hmin(combined) + key;
+                if (min_val >= key && isValue(min_val)) [[likely]] {
+                    return min_val;
+                }
+
+                if (in_padding) [[unlikely]]
                     return std::nullopt;
-                v -= Tvec(key);
 
                 probe = (probe + Tvec::size()) & slot_mask;
             }

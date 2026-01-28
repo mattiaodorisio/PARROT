@@ -5,12 +5,12 @@
 #include "test_index.h"
 
 
-template<bool dynamic, DeLI::RhtOptimization rhtOpt, DeLI::TopLevelOptimization topOpt, size_t bits, size_t lg_buckets, size_t stride>
+template<bool dynamic, DeLI::RhtOptimization rht_opt, DeLI::TopLevelOptimization top_opt, size_t bits, size_t lg_buckets, size_t stride>
 void test_bits() {
-    using Index = DeLI::DeLI<dynamic, rhtOpt, true, topOpt, uint_by_bits_t<bits>, lg_buckets, bits>;
+    using Index = DeLI::DeLI<dynamic, rht_opt, true, 70, top_opt, uint_by_bits_t<bits>, lg_buckets, bits>;
     test_index<Index, bits>();
     if constexpr (bits >= lg_buckets + stride) {
-        test_bits<dynamic, rhtOpt, topOpt, bits - stride, lg_buckets, stride>();
+        test_bits<dynamic, rht_opt, top_opt, bits - stride, lg_buckets, stride>();
     }
 }
 
