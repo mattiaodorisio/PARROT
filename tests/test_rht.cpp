@@ -13,12 +13,16 @@ void test_bits() {
 
 template<bool simd>
 void dispatch() {
-    test_bits<8, true, 127, DeLI::RhtOptimization::slot_index, simd>();
+    if constexpr (!simd) {
+        test_bits<8, true, 127, DeLI::RhtOptimization::slot_index, simd>();
+    }
     test_bits<9, true, 127, DeLI::RhtOptimization::none, simd>();
     test_bits<10, false, 127, DeLI::RhtOptimization::gap_fill_predecessor, simd>();
     test_bits<11, false, 127, DeLI::RhtOptimization::gap_fill_successor, simd>();
     test_bits<12, false, 127, DeLI::RhtOptimization::gap_fill_both, simd>();
-    test_bits<13, false, 127, DeLI::RhtOptimization::slot_index, simd>();
+    if constexpr (!simd) {
+        test_bits<13, false, 127, DeLI::RhtOptimization::slot_index, simd>();
+    }
     test_bits<14, false, 127, DeLI::RhtOptimization::none, simd>();
 }
 
@@ -26,7 +30,7 @@ int main() {
     std::cout << "Running RHT Test" << std::endl;
 
     dispatch<true>();
-    //dispatch<false>();
+    dispatch<false>();
 
     std::cout << "Test RHT passed!" << std::endl;
     return 0;
