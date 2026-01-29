@@ -51,7 +51,7 @@ namespace DeLI {
         sz_t begin_slot; // first slot outside of wrapping area
 
         constexpr static sz_t load_shifter = 16;
-        constexpr static sz_t inv_max_load = sz_t(double((size_t(100)<<load_shifter)) / double(max_load_perc));
+        constexpr static sz_t inv_max_load = sz_t(double((size_t(100) << load_shifter)) / double(max_load_perc));
         constexpr static sz_t shrink_threshold = 4;
         constexpr static T value_mask = utils::safe_shl(T(1), value_bits) - 1;
 
@@ -95,7 +95,8 @@ namespace DeLI {
         }
 
         sz_t num_slot_target(sz_t new_num_elements) const {
-            sz_t target = new_num_elements == 0 ? 0 : std::bit_ceil((inv_max_load * (new_num_elements + padding_length)) >> load_shifter);
+            sz_t target = new_num_elements == 0 ? 0 : std::bit_ceil(
+                    (inv_max_load * (new_num_elements + padding_length)) >> load_shifter);
             // ensure at most as many slots as possible values
             if constexpr (value_bits >= 64 - padding_length) {
                 return target;
@@ -301,22 +302,6 @@ namespace DeLI {
 
         bool remove(T key) requires(!dynamic) = delete;
 
-        bool contains(T key) const {
-            if (empty()) {
-                return false;
-            }
-            key = key & value_mask;
-            sz_t slot_mask = table.size() - 1;
-            sz_t probe = std::max(begin_slot, scale(key));
-            while (table[probe] < key && isValue(table[probe])) {
-                probe = (probe + 1) & slot_mask;
-                if (probe == begin_slot) {
-                    break;
-                }
-            }
-            return (table[probe] == key);
-        }
-
         void clear() {
             RHT empty_rht;
             std::swap(*this, empty_rht);
@@ -326,38 +311,62 @@ namespace DeLI {
             return num_elements == 0;
         }
 
-        inline std::optional<T> min() const {
-            if constexpr (!dynamic) {
-                return minV;
-            }
-            if (empty()) {
-                return std::nullopt;
-            }
-            sz_t probe = begin_slot;
-            while (!isValue(table[probe])) {
-                ++probe;
-            }
-            return table[probe];
-        }
-
-        inline std::optional<T> max() const {
-            if constexpr (!dynamic) {
-                return maxV;
-            }
-            if (empty()) {
-                return std::nullopt;
-            }
-            sz_t slot_mask = table.size() - 1;
-            sz_t probe = (begin_slot - 1) & slot_mask;
-            while (!isValue(table[probe])) {
-                probe = (probe - 1) & slot_mask;
-            }
-            return table[probe];
-        }
-
         size_t size() const {
             return num_elements;
         }
+
+        class simd_max {
+        public:
+            static Tvec vert(Tvec a, Tvec b) {
+                return stdx::max(a, b);
+            }
+
+            static T horiz(Tvec a) {
+                return stdx::hmax(a);
+            }
+        };
+
+        class simd_min {
+        public:
+            static Tvec vert(Tvec a, Tvec b) {
+                return stdx::min(a, b);
+            }
+
+            static T horiz(Tvec a) {
+                return stdx::hmin(a);
+            }
+        };
+
+        template<int dir, typename op>
+        std::tuple<T, bool> simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
+            Tvec last;
+            Tvec v1 = read_aligned(probe);
+            Tvec combined = v1 - Tvec(key);
+            if constexpr (simd_unrolled > 1) {
+                probe = (probe + dir * Tvec::size()) & slot_mask;
+                Tvec v2 = read_aligned(probe);
+                combined = op::vert(combined, v2 - Tvec(key));
+                if constexpr (simd_unrolled > 2) {
+                    probe = (probe + dir * Tvec::size()) & slot_mask;
+                    Tvec v3 = read_aligned(probe);
+                    combined = op::vert(combined, v3 - Tvec(key));
+                    last = v3;
+                    static_assert(simd_unrolled <= 3);
+                } else {
+                    last = v2;
+                }
+            } else {
+                last = v1;
+            }
+            probe = (probe + dir * Tvec::size()) & slot_mask;
+            bool in_padding = last[dir > 0 ? (Tvec::size() - 1) : 0] == padding;
+            T min_val = op::horiz(combined) + key;
+            return {min_val, in_padding};
+        }
+
+        template<int dir, typename op>
+        std::tuple<T, bool>
+        simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(!use_simd) = delete;
 
         /**
         * Find successor
@@ -384,7 +393,7 @@ namespace DeLI {
             return table[probe];
         }
 
-        std::optional<T> find_next(T key) const requires(use_simd){
+        std::optional<T> find_next(T key) const requires(use_simd) {
             if (empty()) {
                 return std::nullopt;
             }
@@ -392,44 +401,21 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
             while (true) {
-                Tvec last;
-                Tvec v1 = read_aligned(probe);
-                Tvec combined = v1 - Tvec(key);
-                if constexpr (simd_unrolled > 1) {
-                    probe = (probe + Tvec::size()) & slot_mask;
-                    Tvec v2 = read_aligned(probe);
-                    combined = stdx::min(combined, v2 - Tvec(key));
-                    if constexpr (simd_unrolled > 2) {
-                        probe = (probe + Tvec::size()) & slot_mask;
-                        Tvec v3 = read_aligned(probe);
-                        combined = stdx::min(combined, v3 - Tvec(key));
-                        last = v3;
-                        static_assert(simd_unrolled <= 3);
-                    } else {
-                        last = v2;
-                    }
-                } else {
-                    last = v1;
-                }
-                bool in_padding = last[Tvec::size() - 1] == padding;
-                T min_val = stdx::hmin(combined) + key;
-                if (min_val >= key && isValue(min_val)) [[likely]] {
-                    return min_val;
+                auto [res, in_padding] = simd_probe_iter<1, simd_min>(probe, key, slot_mask);
+                if (res >= key && isValue(res)) [[likely]] {
+                    return res;
                 }
 
                 if (in_padding) [[unlikely]]
                     return std::nullopt;
-
-                probe = (probe + Tvec::size()) & slot_mask;
             }
-
         }
 
         /**
         * Find predecesor
         * returns the first element STRICTLY LESS than the given key
         */
-        std::optional<T> find_prev(T key) const {
+        std::optional<T> find_prev(T key) const requires(!use_simd) {
             if (empty()) {
                 return std::nullopt;
             }
@@ -468,6 +454,112 @@ namespace DeLI {
                 }
                 return table[probe];
             }
+        }
+
+        std::optional<T> find_prev(T key) const requires(use_simd) {
+            if (empty()) {
+                return std::nullopt;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key));
+            bool probe_left = table[probe] >= key || !isValue(table[probe]);
+            probe = probe & simd_align_mask;
+            if (probe_left) {
+                while (true) {
+                    auto [res, in_padding] = simd_probe_iter<-1, simd_max>(probe, key, slot_mask);
+                    if (res < key && isValue(res)) [[likely]] {
+                        return res;
+                    }
+                    if (in_padding) [[unlikely]]
+                        return std::nullopt;
+                }
+            } else {
+                std::optional<T> highest_pred = std::nullopt;
+                while (true) {
+                    auto [res, in_padding] = simd_probe_iter<1, simd_max>(probe, key, slot_mask);
+                    if (res < key && isValue(res)) [[likely]] {
+                        highest_pred = res;
+                    }
+                    if (in_padding) [[unlikely]]
+                        return highest_pred;
+                }
+            }
+        }
+
+        bool contains(T key) const requires(!use_simd) {
+            if (empty()) {
+                return false;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key));
+            while (table[probe] < key && isValue(table[probe])) {
+                probe = (probe + 1) & slot_mask;
+                if (probe == begin_slot) {
+                    break;
+                }
+            }
+            return (table[probe] == key);
+        }
+
+        bool contains(T key) const requires(use_simd)  {
+            if (empty()) {
+                return false;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
+            while (true) {
+                Tvec v1 = read_aligned(probe);
+                probe = (probe + Tvec::size()) & slot_mask;
+                Tvec last;
+                bool combined = stdx::any_of(v1 == key);
+                if (simd_unrolled > 1) {
+                    Tvec v2 = read_aligned(probe);
+                    combined |= stdx::any_of(v2 == key);
+                    probe = (probe + Tvec::size()) & slot_mask;
+                    if (simd_unrolled > 2) {
+                        Tvec v3 = read_aligned(probe);
+                        combined |= stdx::any_of(v3 == key);
+                        probe = (probe + Tvec::size()) & slot_mask;
+                        static_assert(simd_unrolled <= 3);
+                        last = v3;
+                    } else {
+                        last = v2;
+                    }
+                } else {
+                    last = v1;
+                }
+                if (combined) {
+                    return true;
+                }
+                if (last[Tvec::size() - 1] > key) {
+                    return false;
+                }
+            }
+        }
+
+        inline std::optional<T> min() const {
+            if constexpr (!dynamic) {
+                return minV;
+            }
+            return find_next(0);
+        }
+
+        inline std::optional<T> max() const {
+            if constexpr (!dynamic) {
+                return maxV;
+            }
+            if (empty()) {
+                return std::nullopt;
+            }
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = (begin_slot - 1) & slot_mask;
+            while (!isValue(table[probe])) {
+                probe = (probe - 1) & slot_mask;
+            }
+            return table[probe];
         }
 
 
