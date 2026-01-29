@@ -540,17 +540,18 @@ namespace DeLI {
             }
         }
 
-        inline std::optional<T> min() const {
+        std::optional<T> min() const {
             if constexpr (!dynamic) {
                 return minV;
             }
             return find_next(0);
         }
 
-        inline std::optional<T> max() const {
-            if constexpr (!dynamic) {
-                return maxV;
-            }
+        std::optional<T> max() const requires(!dynamic) {
+            return maxV;
+        }
+
+        std::optional<T> max() const requires(!use_simd && dynamic) {
             if (empty()) {
                 return std::nullopt;
             }
@@ -562,6 +563,19 @@ namespace DeLI {
             return table[probe];
         }
 
+        std::optional<T> max() const requires(use_simd && dynamic) {
+            if (empty()) {
+                return std::nullopt;
+            }
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = ((begin_slot - padding_length) & slot_mask) & simd_align_mask;
+            while (true) {
+                auto [res, in_padding] = simd_probe_iter<-1, simd_max>(probe, value_mask + 1, slot_mask);
+                if (isValue(res)) [[likely]] {
+                    return res;
+                }
+            }
+        }
 
         bool operator==(const RHT &other) const {
             if (table.size() != other.table.size())

@@ -19,7 +19,7 @@ namespace DeLI {
         bucket_index
     };
 
-    template<bool dynamic, RhtOptimization rht_opt, bool rht_use_simd, size_t rht_max_load_perc, TopLevelOptimization opt, typename T, unsigned int high_bits, unsigned int value_bits =
+    template<bool dynamic, RhtOptimization rht_opt, size_t rht_simd_unrolled, size_t rht_max_load_perc, TopLevelOptimization opt, typename T, unsigned int high_bits, unsigned int value_bits =
     sizeof(T) * CHAR_BIT>
     class DeLI {
         static_assert(value_bits < 128);
@@ -61,7 +61,7 @@ namespace DeLI {
             }
         };
 
-        std::vector<bucket<prec_pred_succ, RHT<dynamic, low_bits, rht_opt, rht_use_simd, rht_max_load_perc>>> top_level;
+        std::vector<bucket<prec_pred_succ, RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc>>> top_level;
         std::conditional_t<use_bucket_index, TwoLevelBitvector, Stub> bucket_bits;
     public:
 
@@ -254,7 +254,7 @@ namespace DeLI {
         }
 
 
-        using inner_const_iterator = typename RHT<dynamic, low_bits, rht_opt, rht_use_simd, rht_max_load_perc>::const_iterator;
+        using inner_const_iterator = typename RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc>::const_iterator;
 
         template<typename InnerIt>
         class iterator_base {
