@@ -315,41 +315,79 @@ namespace DeLI {
             return num_elements;
         }
 
-        class simd_max {
+        class simd_pred_succ_transform {
         public:
-            static Tvec vert(Tvec a, Tvec b) {
+            static auto trans(auto a, auto b) {
+                return a - b;
+            }
+
+            static auto inv_trans(auto a, auto b) {
+                return a + b;
+            }
+
+            static bool stop(auto last, auto key) {
+                return last == padding;
+            }
+        };
+
+        class simd_pred : public simd_pred_succ_transform{
+        public:
+            static auto vert(auto a, auto b) {
                 return stdx::max(a, b);
             }
 
-            static T horiz(Tvec a) {
+            static auto horiz(auto a) {
                 return stdx::hmax(a);
             }
         };
 
-        class simd_min {
+        class simd_succ : public simd_pred_succ_transform{
         public:
-            static Tvec vert(Tvec a, Tvec b) {
+            static auto vert(auto a, auto b) {
                 return stdx::min(a, b);
             }
 
-            static T horiz(Tvec a) {
+            static auto horiz(auto a) {
                 return stdx::hmin(a);
+            }
+        };
+
+        class simd_contains {
+        public:
+            static auto trans(auto a, auto b) {
+                return a == b;
+            }
+
+            static auto inv_trans(auto a, auto b) {
+                return a;
+            }
+
+            static auto vert(auto a, auto b) {
+                return a | b;
+            }
+
+            static auto horiz(auto a) {
+                return stdx::any_of(a);
+            }
+
+            static bool stop(auto last, auto key) {
+                return last > key;
             }
         };
 
         template<int dir, typename op>
         std::tuple<T, bool> simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
             Tvec last;
-            Tvec v1 = read_aligned(probe);
-            Tvec combined = v1 - Tvec(key);
+            auto v1 = read_aligned(probe);
+            auto combined = op::trans(v1, key);
             if constexpr (simd_unrolled > 1) {
                 probe = (probe + dir * Tvec::size()) & slot_mask;
-                Tvec v2 = read_aligned(probe);
-                combined = op::vert(combined, v2 - Tvec(key));
+                auto v2 = read_aligned(probe);
+                combined = op::vert(combined, op::trans(v2, key));
                 if constexpr (simd_unrolled > 2) {
                     probe = (probe + dir * Tvec::size()) & slot_mask;
-                    Tvec v3 = read_aligned(probe);
-                    combined = op::vert(combined, v3 - Tvec(key));
+                    auto v3 = read_aligned(probe);
+                    combined = op::vert(combined, op::trans(v3, key));
                     last = v3;
                     static_assert(simd_unrolled <= 3);
                 } else {
@@ -359,9 +397,9 @@ namespace DeLI {
                 last = v1;
             }
             probe = (probe + dir * Tvec::size()) & slot_mask;
-            bool in_padding = last[dir > 0 ? (Tvec::size() - 1) : 0] == padding;
-            T min_val = op::horiz(combined) + key;
-            return {min_val, in_padding};
+            bool in_padding = op::stop(last[dir > 0 ? (Tvec::size() - 1) : 0], key);
+            T res = op::inv_trans(op::horiz(combined), key);
+            return {res, in_padding};
         }
 
         template<int dir, typename op>
@@ -401,7 +439,7 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
             while (true) {
-                auto [res, in_padding] = simd_probe_iter<1, simd_min>(probe, key, slot_mask);
+                auto [res, in_padding] = simd_probe_iter<1, simd_succ>(probe, key, slot_mask);
                 if (res >= key && isValue(res)) [[likely]] {
                     return res;
                 }
@@ -467,7 +505,7 @@ namespace DeLI {
             probe = probe & simd_align_mask;
             if (probe_left) {
                 while (true) {
-                    auto [res, in_padding] = simd_probe_iter<-1, simd_max>(probe, key, slot_mask);
+                    auto [res, in_padding] = simd_probe_iter<-1, simd_pred>(probe, key, slot_mask);
                     if (res < key && isValue(res)) [[likely]] {
                         return res;
                     }
@@ -477,7 +515,7 @@ namespace DeLI {
             } else {
                 std::optional<T> highest_pred = std::nullopt;
                 while (true) {
-                    auto [res, in_padding] = simd_probe_iter<1, simd_max>(probe, key, slot_mask);
+                    auto [res, in_padding] = simd_probe_iter<1, simd_pred>(probe, key, slot_mask);
                     if (res < key && isValue(res)) [[likely]] {
                         highest_pred = res;
                     }
@@ -511,30 +549,11 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
             while (true) {
-                Tvec v1 = read_aligned(probe);
-                probe = (probe + Tvec::size()) & slot_mask;
-                Tvec last;
-                bool combined = stdx::any_of(v1 == key);
-                if (simd_unrolled > 1) {
-                    Tvec v2 = read_aligned(probe);
-                    combined |= stdx::any_of(v2 == key);
-                    probe = (probe + Tvec::size()) & slot_mask;
-                    if (simd_unrolled > 2) {
-                        Tvec v3 = read_aligned(probe);
-                        combined |= stdx::any_of(v3 == key);
-                        probe = (probe + Tvec::size()) & slot_mask;
-                        static_assert(simd_unrolled <= 3);
-                        last = v3;
-                    } else {
-                        last = v2;
-                    }
-                } else {
-                    last = v1;
-                }
-                if (combined) {
+                auto [res, ends] = simd_probe_iter<1, simd_contains>(probe, key, slot_mask);
+                if (res) {
                     return true;
                 }
-                if (last[Tvec::size() - 1] > key) {
+                if (ends) {
                     return false;
                 }
             }
@@ -570,7 +589,7 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t probe = ((begin_slot - padding_length) & slot_mask) & simd_align_mask;
             while (true) {
-                auto [res, in_padding] = simd_probe_iter<-1, simd_max>(probe, value_mask + 1, slot_mask);
+                auto [res, in_padding] = simd_probe_iter<-1, simd_pred>(probe, value_mask + 1, slot_mask);
                 if (isValue(res)) [[likely]] {
                     return res;
                 }
