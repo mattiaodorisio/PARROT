@@ -550,11 +550,8 @@ namespace DeLI {
             sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
             while (true) {
                 auto [res, ends] = simd_probe_iter<1, simd_contains>(probe, key, slot_mask);
-                if (res) {
-                    return true;
-                }
-                if (ends) {
-                    return false;
+                if (res || ends) [[likely]] {
+                    return res;
                 }
             }
         }
