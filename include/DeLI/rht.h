@@ -330,7 +330,7 @@ namespace DeLI {
             }
         };
 
-        class simd_pred : public simd_pred_succ_transform{
+        class simd_pred : public simd_pred_succ_transform {
         public:
             static auto vert(auto a, auto b) {
                 return stdx::max(a, b);
@@ -341,7 +341,7 @@ namespace DeLI {
             }
         };
 
-        class simd_succ : public simd_pred_succ_transform{
+        class simd_succ : public simd_pred_succ_transform {
         public:
             static auto vert(auto a, auto b) {
                 return stdx::min(a, b);
@@ -375,31 +375,30 @@ namespace DeLI {
             }
         };
 
+
+        // returns (combined, last)
+        template<int dir, typename op, int i>
+        auto simd_probe_unrolled(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
+            auto v = read_aligned(probe);
+            probe = (probe + dir * Tvec::size()) & slot_mask;
+            auto vt = op::trans(v, key);
+            if constexpr (i > 1) {
+                auto [comb, last] = simd_probe_unrolled<dir, op, i - 1>(probe, key, slot_mask);
+                return std::make_pair(op::vert(vt, comb), last);
+            } else {
+                return std::make_pair(vt, v);
+            }
+        }
+
+        template<int dir, typename op, int i>
+        auto simd_probe_unrolled(sz_t &probe, const T key, const T slot_mask)  const requires(!use_simd) = delete;
+
         template<int dir, typename op>
         std::tuple<T, bool> simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
-            Tvec last;
-            auto v1 = read_aligned(probe);
-            auto combined = op::trans(v1, key);
-            if constexpr (simd_unrolled > 1) {
-                probe = (probe + dir * Tvec::size()) & slot_mask;
-                auto v2 = read_aligned(probe);
-                combined = op::vert(combined, op::trans(v2, key));
-                if constexpr (simd_unrolled > 2) {
-                    probe = (probe + dir * Tvec::size()) & slot_mask;
-                    auto v3 = read_aligned(probe);
-                    combined = op::vert(combined, op::trans(v3, key));
-                    last = v3;
-                    static_assert(simd_unrolled <= 3);
-                } else {
-                    last = v2;
-                }
-            } else {
-                last = v1;
-            }
-            probe = (probe + dir * Tvec::size()) & slot_mask;
-            bool in_padding = op::stop(last[dir > 0 ? (Tvec::size() - 1) : 0], key);
-            T res = op::inv_trans(op::horiz(combined), key);
-            return {res, in_padding};
+            auto [comb, last] = simd_probe_unrolled<dir, op, simd_unrolled>(probe, key, slot_mask);
+            bool is_stop = op::stop(last[dir > 0 ? (Tvec::size() - 1) : 0], key);
+            T res = op::inv_trans(op::horiz(comb), key);
+            return {res, is_stop};
         }
 
         template<int dir, typename op>
