@@ -8,21 +8,21 @@
 #include <algorithm>
 
 namespace DeLI::utils {
-  
+
   // credit http://stereopsis.com/radix.html
-  
+
   // Generic template functions - to be specialized for specific types
   // UIntType can only be uint32_t or uint64_t
   template<typename T, typename UIntType>
   inline UIntType to_uint(const T value) {
       return UIntType(value);
   }
-  
+
   template<typename T, typename UIntType>
   inline T from_uint(UIntType x) {
       return T(x);
   }
-  
+
   // Specializations for double -> uint64_t
   template<>
   inline uint64_t to_uint<double, uint64_t>(const double d) {
@@ -31,7 +31,7 @@ namespace DeLI::utils {
     uint64_t mask = -int64_t(r >> 63) | 0x8000000000000000;
     return r ^ mask;
   }
-  
+
   template<>
   inline double from_uint<double, uint64_t>(uint64_t x) {
     uint64_t mask = ((x >> 63) - 1) | 0x8000000000000000;
@@ -40,7 +40,7 @@ namespace DeLI::utils {
     std::memcpy(&res, &r, sizeof(double));
     return res;
   }
-  
+
   // Specializations for float -> uint32_t
   template<>
   inline uint32_t to_uint<float, uint32_t>(const float f) {
@@ -49,7 +49,7 @@ namespace DeLI::utils {
     uint32_t mask = -int32_t(r >> 31) | 0x80000000;
     return r ^ mask;
   }
-  
+
   template<>
   inline float from_uint<float, uint32_t>(uint32_t f) {
     uint32_t mask = ((f >> 31) - 1) | 0x80000000;

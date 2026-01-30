@@ -391,7 +391,7 @@ namespace DeLI {
         }
 
         template<int dir, typename op, int i>
-        auto simd_probe_unrolled(sz_t &probe, const T key, const T slot_mask)  const requires(!use_simd) = delete;
+        auto simd_probe_unrolled(sz_t &probe, const T key, const T slot_mask) const requires(!use_simd) = delete;
 
         template<int dir, typename op>
         std::tuple<T, bool> simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
