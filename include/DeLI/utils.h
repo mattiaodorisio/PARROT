@@ -199,6 +199,35 @@ namespace DeLI::utils {
     template<typename T, std::size_t Alignment = 64>
     using AlignedVector = std::vector<T, AlignedAllocator<T, Alignment>>;
 
+    template<class Simd>
+    constexpr std::size_t simd_bit_width()
+    {
+        using value_type = typename Simd::value_type;
+        return Simd::size() * sizeof(value_type) * 8;
+    }
+
+    template<typename Simd>
+    void print_simd_info()
+    {
+      using value_type = typename Simd::value_type;
+      using mask_type  = typename Simd::mask_type;
+
+      constexpr std::size_t lanes = Simd::size();
+      constexpr std::size_t lane_bits = sizeof(value_type) * 8;
+      constexpr std::size_t total_bits = lanes * lane_bits;
+
+      std::cout << "SIMD type info\n";
+      std::cout << "--------------\n";
+
+      std::cout << "Value type      : " << typeid(value_type).name() << "\n";
+      std::cout << "Mask type       : " << typeid(mask_type).name() << "\n";
+      std::cout << "Number of lanes : " << lanes << "\n";
+      std::cout << "Bits per lane   : " << lane_bits << "\n";
+      std::cout << "Total bits      : " << total_bits << "\n";
+      std::cout << "Size (bytes)    : " << sizeof(Simd) << "\n";
+      std::cout << "Alignment       : " << alignof(Simd) << "\n";
+      std::cout << "ABI type        : " << typeid(typename Simd::abi_type).name() << "\n";
+    }
 
     template <size_t Bits>
     using uint_by_bits_t =

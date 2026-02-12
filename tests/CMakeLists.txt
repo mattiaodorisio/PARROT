@@ -23,4 +23,8 @@ foreach(TEST_SOURCE IN LISTS TEST_SOURCES)
     set_target_properties(${TEST_NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
     )
+
+
+    target_compile_options(${TEST_NAME} PRIVATE -march=native -Wno-stringop-overflow)
+
 endforeach()

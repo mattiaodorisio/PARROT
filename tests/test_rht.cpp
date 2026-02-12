@@ -5,8 +5,9 @@
 template<size_t stride, bool dynamic, size_t bits, DeLI::RhtOptimization opt, size_t simd>
 void test_bits() {
     using Index = DeLI::RHT<dynamic, bits, opt, simd, 50>;
+    DeLI::utils::print_simd_info<typename Index::Tvec>();
     test_index<Index, bits>();
-    if constexpr (bits >= stride) {
+    if constexpr (bits > stride) {
         test_bits<stride, dynamic, bits - stride, opt, simd>();
     }
 }

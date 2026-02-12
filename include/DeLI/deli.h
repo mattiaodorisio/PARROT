@@ -61,9 +61,12 @@ namespace DeLI {
             }
         };
 
-        std::vector<bucket<prec_pred_succ, RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc>>> top_level;
+        using RHT_t = RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc>;
+        std::vector<bucket<prec_pred_succ, RHT_t>> top_level;
         std::conditional_t<use_bucket_index, TwoLevelBitvector, Stub> bucket_bits;
     public:
+
+        constexpr static size_t rht_simd_width = RHT_t::simd_width;
 
         DeLI() : bucket_bits(buckets), top_level(buckets) {
             ;
@@ -254,7 +257,7 @@ namespace DeLI {
         }
 
 
-        using inner_const_iterator = typename RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc>::const_iterator;
+        using inner_const_iterator = typename RHT_t::const_iterator;
 
         template<typename InnerIt>
         class iterator_base {
@@ -305,13 +308,14 @@ namespace DeLI {
 
             void advance_to_valid() {
                 if constexpr (use_bucket_index || prec_pred_succ) {
-                    if(outer_idx + 1 < parent.top_level.size() && inner_it == parent.top_level[outer_idx].rht.end()) {
+                    if (outer_idx + 1 < parent.top_level.size() && inner_it == parent.top_level[outer_idx].rht.end()) {
                         std::optional<inner_t> next_bucket;
                         if constexpr (use_bucket_index) {
                             next_bucket = parent.bucket_bits.find_next(outer_idx + 1);
                         } else if constexpr (prec_pred_succ) {
                             std::optional<inner_t> nextV = parent.top_level[outer_idx].successor;
-                            next_bucket = nextV.has_value() ? std::optional<inner_t>(parent.getBucket(nextV.value())) : std::nullopt;
+                            next_bucket = nextV.has_value() ? std::optional<inner_t>(parent.getBucket(nextV.value()))
+                                                            : std::nullopt;
                         }
                         if (next_bucket) {
                             outer_idx = next_bucket.value();
@@ -323,7 +327,8 @@ namespace DeLI {
                         }
                     }
                 } else {
-                    while (outer_idx + 1 < parent.top_level.size() && inner_it == parent.top_level[outer_idx].rht.end()) {
+                    while (outer_idx + 1 < parent.top_level.size() &&
+                           inner_it == parent.top_level[outer_idx].rht.end()) {
                         ++outer_idx;
                         inner_it = parent.top_level[outer_idx].rht.begin();
                     }

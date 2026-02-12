@@ -29,14 +29,19 @@ namespace DeLI {
     class RHT {
         constexpr static bool use_simd = simd_unrolled > 0;
         static_assert(value_bits < 128);
+        static_assert(value_bits > 0);
         static_assert(max_load_perc < 100);
         static_assert(max_load_perc > 0);
         static_assert(RhtOptimization::gap_fill_successor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_predecessor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_both != opt || !dynamic);
         static_assert(RhtOptimization::slot_index != opt || !use_simd);
-    private:
+    public:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
+        using Tvec = stdx::native_simd<T>;
+        constexpr static size_t simd_width = utils::simd_bit_width<Tvec>();
+
+    private:
         using sz_t = size_t;
 
         struct Stub {
@@ -59,7 +64,6 @@ namespace DeLI {
         constexpr static T empty_v = std::numeric_limits<T>::max();
         constexpr static T padding = std::numeric_limits<T>::max() - 1;
 
-        using Tvec = stdx::native_simd<T>;
         constexpr static sz_t padding_length = simd_unrolled * Tvec::size();
         constexpr static sz_t simd_align_mask = ~(Tvec::size() - 1);
 
@@ -378,7 +382,7 @@ namespace DeLI {
 
         // returns (combined, last)
         template<int dir, typename op, int i>
-        auto simd_probe_unrolled(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
+        auto simd_probe_unrolled(sz_t &probe, const T key, const sz_t slot_mask) const requires(use_simd) {
             auto v = read_aligned(probe);
             probe = (probe + dir * Tvec::size()) & slot_mask;
             auto vt = op::trans(v, key);
@@ -391,10 +395,10 @@ namespace DeLI {
         }
 
         template<int dir, typename op, int i>
-        auto simd_probe_unrolled(sz_t &probe, const T key, const T slot_mask) const requires(!use_simd) = delete;
+        auto simd_probe_unrolled(sz_t &probe, const T key, const sz_t slot_mask) const requires(!use_simd) = delete;
 
         template<int dir, typename op>
-        std::tuple<T, bool> simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(use_simd) {
+        std::tuple<T, bool> simd_probe_iter(sz_t &probe, const T key, const sz_t slot_mask) const requires(use_simd) {
             auto [comb, last] = simd_probe_unrolled<dir, op, simd_unrolled>(probe, key, slot_mask);
             bool is_stop = op::stop(last[dir > 0 ? (Tvec::size() - 1) : 0], key);
             T res = op::inv_trans(op::horiz(comb), key);
@@ -403,7 +407,7 @@ namespace DeLI {
 
         template<int dir, typename op>
         std::tuple<T, bool>
-        simd_probe_iter(sz_t &probe, const T key, const T slot_mask) const requires(!use_simd) = delete;
+        simd_probe_iter(sz_t &probe, const T key, const sz_t slot_mask) const requires(!use_simd) = delete;
 
         /**
         * Find successor
