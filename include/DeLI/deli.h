@@ -19,8 +19,9 @@ namespace DeLI {
         bucket_index
     };
 
-    template<bool dynamic, RhtOptimization rht_opt, size_t rht_simd_unrolled, size_t rht_max_load_perc, TopLevelOptimization opt, typename T, unsigned int high_bits, unsigned int value_bits =
-    sizeof(T) * CHAR_BIT>
+    template<bool dynamic, RhtOptimization rht_opt, size_t rht_simd_unrolled, size_t rht_max_load_perc,
+             TopLevelOptimization opt, typename T, unsigned int high_bits,
+             unsigned int value_bits = sizeof(T) * CHAR_BIT, typename PayloadT = NoPayload>
     class DeLI {
         static_assert(value_bits < 128);
         static_assert(sizeof(T) * CHAR_BIT >= value_bits);
@@ -61,9 +62,39 @@ namespace DeLI {
             }
         };
 
-        using RHT_t = RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc>;
+        using RHT_t = RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc, PayloadT>;
         std::vector<bucket<prec_pred_succ, RHT_t>> top_level;
         std::conditional_t<use_bucket_index, TwoLevelBitvector, Stub> bucket_bits;
+        constexpr static bool has_payloads = RHT_t::has_payloads;
+        
+        template<typename Entry>
+        static constexpr bool entry_has_key = requires(const Entry &e) {
+            e.key();
+        };
+
+        template<typename Entry>
+        static constexpr bool entry_has_first = requires(const Entry &e) {
+            e.first;
+        };
+
+        template<typename Entry>
+        static inner_t entry_to_inner(const Entry &e) {
+            if constexpr (entry_has_key<Entry>) {
+                return utils::to_uint<T, inner_t>(e.key());
+            } else if constexpr (entry_has_first<Entry>) {
+                return utils::to_uint<T, inner_t>(e.first);
+            } else {
+                return utils::to_uint<T, inner_t>(e);
+            }
+        }
+
+        template<typename It>
+        static constexpr void validate_payload_iter() requires(has_payloads) {
+            using entry_t = std::remove_cvref_t<decltype(*std::declval<It &>())>;
+            static_assert(entry_has_key<entry_t> || entry_has_first<entry_t>,
+                          "When has_payload is true, iterator entries must provide either .key() or .first (pair-like)");
+        }
+
     public:
 
         constexpr static size_t rht_simd_width = RHT_t::simd_width;
@@ -75,28 +106,31 @@ namespace DeLI {
 
         template<typename It>
         void bulk_load(It begin, It end) {
-            assert(std::is_sorted(begin, end));
+            if constexpr (has_payloads) {
+                validate_payload_iter<It>();
+            }
+            assert(std::is_sorted(begin, end, [](const auto &a, const auto &b) {
+                return entry_to_inner(a) < entry_to_inner(b);
+            }));
             if (begin == end) {
                 return;
             }
-            auto inner_iter = std::ranges::subrange<It>(begin, end) |
-                              std::ranges::views::transform([](T x) { return utils::to_uint<T, inner_t>(x); });
-
             // Split the input into buckets based on high bits
-            auto bucket_start = inner_iter.begin();
-            inner_t current_high = getBucket(*bucket_start);
+            auto bucket_start = begin;
+            inner_t current_high = getBucket(entry_to_inner(*bucket_start));
             size_t keys_in_bucket = 0;
             std::vector<std::optional<inner_t>> bucketMaxs(prec_pred_succ ? buckets : 0, std::nullopt);
             std::vector<std::optional<inner_t>> bucketMins(prec_pred_succ ? buckets : 0, std::nullopt);
-            for (auto it = inner_iter.begin(); it != inner_iter.end(); ++it) {
-                inner_t high = getBucket(*it);
+            for (auto it = begin; it != end; ++it) {
+                inner_t key_inner = entry_to_inner(*it);
+                inner_t high = getBucket(key_inner);
                 if (high != current_high) {
                     // Bulk load the current bucket
                     top_level[current_high].rht.bulk_load(bucket_start, it, keys_in_bucket);
                     if constexpr (prec_pred_succ) {
                         if (bucket_start != it) {
-                            bucketMins[current_high] = *bucket_start;
-                            bucketMaxs[current_high] = *(it - 1);
+                            bucketMins[current_high] = entry_to_inner(*bucket_start);
+                            bucketMaxs[current_high] = entry_to_inner(*std::prev(it));
                         }
                     }
                     bucket_start = it;
@@ -105,11 +139,11 @@ namespace DeLI {
                 }
                 keys_in_bucket++;
             }
-            top_level[current_high].rht.bulk_load(bucket_start, inner_iter.end(), keys_in_bucket);
+            top_level[current_high].rht.bulk_load(bucket_start, end, keys_in_bucket);
             if constexpr (prec_pred_succ) {
-                if (bucket_start != inner_iter.end()) {
-                    bucketMins[current_high] = *bucket_start;
-                    bucketMaxs[current_high] = *(inner_iter.end() - 1);
+                if (bucket_start != end) {
+                    bucketMins[current_high] = entry_to_inner(*bucket_start);
+                    bucketMaxs[current_high] = entry_to_inner(*std::prev(end));
                 }
 
                 //precompute pred and succ of buckets
@@ -142,16 +176,16 @@ namespace DeLI {
             }
         }
 
-        bool insert(T key_) requires(dynamic) {
+        bool insert(T key_, const typename RHT_t::payload_t &payload_ = typename RHT_t::payload_t{}) requires(dynamic) {
             inner_t key = utils::to_uint<T, inner_t>(key_);
             inner_t high = getBucket(key);
             if constexpr (use_bucket_index) {
                 bucket_bits.insert(high);
             }
-            return top_level[high].rht.insert(key);
+            return top_level[high].rht.insert(key, payload_);
         }
 
-        bool insert(T key_) requires(!dynamic) = delete;
+        bool insert(T key_, const typename RHT_t::payload_t &payload_ = typename RHT_t::payload_t{}) requires(!dynamic) = delete;
 
         bool remove(T key_) requires(dynamic) {
             inner_t key = utils::to_uint<T, inner_t>(key_);

@@ -8,6 +8,7 @@
 #include <iterator>
 #include <cstdint>
 #include <variant>
+#include <type_traits>
 #include "bitvector.h"
 
 #include "utils.h"
@@ -16,6 +17,9 @@
 namespace stdx = std::experimental;
 
 namespace DeLI {
+    struct NoPayload {
+    };
+
     enum class RhtOptimization {
         none,
         slot_index,
@@ -25,7 +29,8 @@ namespace DeLI {
     };
 
 
-    template<bool dynamic, unsigned int value_bits, RhtOptimization opt, size_t simd_unrolled, size_t max_load_perc>
+    template<bool dynamic, unsigned int value_bits, RhtOptimization opt, size_t simd_unrolled, size_t max_load_perc,
+             typename PayloadT = NoPayload>
     class RHT {
         constexpr static bool use_simd = simd_unrolled > 0;
         static_assert(value_bits < 128);
@@ -36,21 +41,75 @@ namespace DeLI {
         static_assert(RhtOptimization::gap_fill_predecessor != opt || !dynamic);
         static_assert(RhtOptimization::gap_fill_both != opt || !dynamic);
         static_assert(RhtOptimization::slot_index != opt || !use_simd);
+        static constexpr bool has_payload = !std::is_same_v<PayloadT, NoPayload>;
     public:
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
         using Tvec = stdx::native_simd<T>;
+        using payload_t = PayloadT;
         constexpr static size_t simd_width = utils::simd_bit_width<Tvec>();
+        constexpr static bool has_payloads = has_payload;
 
     private:
         using sz_t = size_t;
+
+        template<typename It>
+        static constexpr bool iter_has_key = requires(const It &it) {
+            it.key();
+        };
+
+        template<typename It>
+        static constexpr bool iter_has_payload = requires(const It &it) {
+            it.payload();
+        };
+
+        template<typename It>
+        static constexpr bool iter_has_first = requires(const It &it) {
+            it.first;
+        };
+
+        template<typename It>
+        static constexpr bool iter_has_second = requires(const It &it) {
+            it.second;
+        };
+
+        template<typename It>
+        static T iter_key(const It &it) {
+            if constexpr (iter_has_key<It>) {
+                return it.key();
+            } else if constexpr (iter_has_first<It>) {
+                return static_cast<T>(it.first);
+            } else {
+                return static_cast<T>(*it);
+            }
+        }
+
+        template<typename It>
+        static payload_t iter_payload(const It &it) requires(has_payload) {
+            if constexpr (iter_has_payload<It>) {
+                return it.payload();
+            } else if constexpr (iter_has_second<It>) {
+                return it.second;
+            } else {
+                return payload_t{};
+            }
+        }
+
+        // Static assertion: if has_payload, iterator must provide either payload() or .second
+        template<typename It>
+        static constexpr void validate_payload_iter() requires(has_payload) {
+            static_assert(iter_has_payload<It> || iter_has_second<It>,
+                "When has_payload is true, iterator must provide either .payload() method or .second member (pair-like)");
+        }
 
         struct Stub {
             Stub(size_t) {
             }
         };
 
+        using PayloadStorage_t = std::conditional_t<has_payload, utils::AlignedVector<payload_t>, Stub>;
         std::conditional_t<opt == RhtOptimization::slot_index, TwoLevelBitvector, Stub> slot_bits;
         utils::AlignedVector<T> table;
+        PayloadStorage_t payload_table;
         sz_t num_elements;
         sz_t slot_shift;
         sz_t begin_slot; // first slot outside of wrapping area
@@ -129,16 +188,28 @@ namespace DeLI {
             };
         }
 
+        void clear_payload_slot(sz_t slot) {
+            if constexpr (has_payload) {
+                payload_table[slot] = payload_t{};
+            }
+        }
+
         template<typename It>
         void insert_sorted(It begin, It end) {
             assert(std::is_sorted(begin, end));
             It begin_copy = begin;
             sz_t slot_mask = table.size() - 1;
             sz_t next_slot = 0; // points to the next free slot
+            std::optional<T> first_seen = std::nullopt;
+            std::optional<T> last_seen = std::nullopt;
 
             std::vector<bool> occupied_slots(table.size(), false);
             while (begin != end) {
-                T v = *begin & value_mask;
+                T v = iter_key(begin) & value_mask;
+                if (!first_seen) {
+                    first_seen = v;
+                }
+                last_seen = v;
                 num_elements++;
                 sz_t slot = scale(v);
                 if (slot < next_slot) {
@@ -147,6 +218,9 @@ namespace DeLI {
                     next_slot = slot + 1;
                 }
                 table[slot] = v;
+                if constexpr (has_payload) {
+                    payload_table[slot] = iter_payload(begin);
+                }
                 occupied_slots[slot] = true;
                 if constexpr (use_slot_index) {
                     slot_bits.insert(slot);
@@ -164,6 +238,7 @@ namespace DeLI {
                         sz_t slot = (next_slot++) & slot_mask;
                         occupied_slots[slot] = true;
                         table[slot] = padding;
+                        clear_payload_slot(slot);
                     }
                 }
             }
@@ -171,7 +246,7 @@ namespace DeLI {
             // correct the elements at the beginning that are overwritten due to wrap around
             begin = begin_copy;
             while (begin != end) {
-                T v = *begin & value_mask;
+                T v = iter_key(begin) & value_mask;
                 if (scale(v) >= next_slot) {
                     break;
                 }
@@ -179,7 +254,11 @@ namespace DeLI {
                 if constexpr (use_slot_index) {
                     slot_bits.insert(next_slot);
                 }
-                table[next_slot++] = v;
+                table[next_slot] = v;
+                if constexpr (has_payload) {
+                    payload_table[next_slot] = iter_payload(begin);
+                }
+                ++next_slot;
                 begin++;
             }
             if (!table.empty()) {
@@ -192,18 +271,23 @@ namespace DeLI {
             }
             if constexpr (!dynamic) {
                 if (!empty()) {
-                    minV = *begin_copy;
-                    maxV = *(end - 1);
+                    minV = first_seen;
+                    maxV = last_seen;
                 }
             }
         }
 
+
+
         template<typename It>
         RHT(It begin, It end, sz_t slots) : begin_slot(0), num_elements(0), table(slots, empty_v),
+                                            payload_table(slots),
                                             slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))),
                                             slot_bits(slots) {
             insert_sorted(begin, end);
         }
+
+
 
         void ensure_scaling(sz_t new_num_elements) {
             sz_t slot_target = num_slot_target(new_num_elements);
@@ -216,11 +300,14 @@ namespace DeLI {
 
     public:
 
-        RHT() : table(0), begin_slot(0), slot_shift(0), num_elements(0), slot_bits(0) {
+        RHT() : table(0), payload_table(0), begin_slot(0), slot_shift(0), num_elements(0), slot_bits(0) {
         }
 
         template<typename It>
         void bulk_load(It b, It e, size_t keys) {
+            if constexpr (has_payload) {
+                validate_payload_iter<It>();
+            }
             assert(std::distance(b, e) == keys);
             size_t opt_size = num_slot_target(keys);
             RHT replacement = RHT(b, e, opt_size);
@@ -232,12 +319,13 @@ namespace DeLI {
             bulk_load(begin, end, std::distance(begin, end));
         }
 
-        bool insert(T key) requires(dynamic) {
+        bool insert(T key, const payload_t &payload = payload_t{}) requires(dynamic) {
             ensure_scaling(num_elements + 1);
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key));
             sz_t start_probe = probe;
+            payload_t payload_tmp = payload;
 
             while (table[probe] < key && isValue(table[probe])) {
                 probe = (probe + 1) & slot_mask;
@@ -252,9 +340,15 @@ namespace DeLI {
             while (table[probe] != empty_v) {
                 // also shift padding
                 std::swap(key, table[probe]);
+                if constexpr (has_payload) {
+                    std::swap(payload_tmp, payload_table[probe]);
+                }
                 probe = (probe + 1) & slot_mask;
             }
             table[probe] = key;
+            if constexpr (has_payload) {
+                payload_table[probe] = payload_tmp;
+            }
             if constexpr (use_slot_index) {
                 slot_bits.insert(probe);
             }
@@ -264,7 +358,7 @@ namespace DeLI {
             return true;
         }
 
-        bool insert(T key) requires(!dynamic) = delete;
+        bool insert(T key, const payload_t &payload = payload_t{}) requires(!dynamic) = delete;
 
         bool remove(T key) requires(dynamic) {
             if (table.empty()) {
@@ -288,12 +382,16 @@ namespace DeLI {
                 sz_t next_probe = (probe + 1) & slot_mask;
                 if (table[next_probe] == empty_v || scale(table[next_probe]) == next_probe) {
                     table[probe] = empty_v;
+                    clear_payload_slot(probe);
                     if constexpr (use_slot_index) {
                         slot_bits.remove(probe);
                     }
                     break;
                 }
                 table[probe] = table[next_probe];
+                if constexpr (has_payload) {
+                    payload_table[probe] = payload_table[next_probe];
+                }
                 probe = next_probe;
             }
             if (probe < probe_begin) {
@@ -672,11 +770,23 @@ namespace DeLI {
             }
 
             T operator*() const {
-                return rht.table[index];
+                return key();
             }
 
             const T *operator->() const {
                 return &rht.table[index];
+            }
+
+            T key() const {
+                return rht.table[index];
+            }
+
+            const payload_t &payload() const requires(has_payload) {
+                return rht.payload_table[index];
+            }
+
+            sz_t slot_index() const {
+                return index;
             }
 
             bool operator==(const const_iterator &other) const { return index == other.index; }
