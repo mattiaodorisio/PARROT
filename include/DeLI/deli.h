@@ -20,8 +20,8 @@ namespace DeLI {
     };
 
     template<bool dynamic, RhtOptimization rht_opt, size_t rht_simd_unrolled, size_t rht_max_load_perc,
-             TopLevelOptimization opt, typename T, unsigned int high_bits,
-             unsigned int value_bits = sizeof(T) * CHAR_BIT, typename PayloadT = NoPayload>
+             TopLevelOptimization opt, typename T, unsigned int high_bits, typename PayloadT = NoPayload,
+             unsigned int value_bits = sizeof(T) * CHAR_BIT>
     class DeLI {
         static_assert(value_bits < 128);
         static_assert(sizeof(T) * CHAR_BIT >= value_bits);
@@ -229,32 +229,42 @@ namespace DeLI {
         * Find successor
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
         */
-        std::optional<T> find_next(T key_) const {
+        auto find_next_iter(T key_) const {
             inner_t key = utils::to_uint<T, inner_t>(key_);
             inner_t high = getBucket(key);
-            std::optional<inner_t> res = top_level[high].rht.find_next(key);
+            auto inner_it = top_level[high].rht.find_next_iter(key);
+            if (inner_it != top_level[high].rht.end()) {
+                return iterator_base<inner_const_iterator>(*this, high, inner_it);
+            }
 
             if constexpr (prec_pred_succ) {
-                if (!res) {
-                    res = top_level[high].successor;
-                    return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
+                std::optional<inner_t> next_key = top_level[high].successor;
+                if (next_key) {
+                    high = getBucket(next_key.value());
+                    return iterator_base<inner_const_iterator>(*this, high, top_level[high].rht.begin());
                 }
             } else if constexpr (use_bucket_index) {
-                if (!res && high + 1 < buckets) {
+                if (high + 1 < buckets) {
                     std::optional<inner_t> next_bucket = bucket_bits.find_next(high + 1);
                     if (next_bucket) {
-                        res = top_level[next_bucket.value()].rht.min();
                         high = next_bucket.value();
+                        return iterator_base<inner_const_iterator>(*this, high, top_level[high].rht.begin());
                     }
                 }
             } else {
-                while (!res && ++high < buckets) {
-                    res = top_level[high].rht.min();
+                while (++high < buckets) {
+                    if (!top_level[high].rht.empty()) {
+                        return iterator_base<inner_const_iterator>(*this, high, top_level[high].rht.begin());
+                    }
                 }
             }
 
-            return res ? std::optional<T>(utils::from_uint<T, inner_t>(recombineResult(high, res.value())))
-                       : std::nullopt;
+            return end();
+        }
+
+        std::optional<T> find_next(T key_) const {
+            auto it = find_next_iter(key_);
+            return it == end() ? std::nullopt : std::optional<T>(it.key());
         }
 
         /**
@@ -298,6 +308,9 @@ namespace DeLI {
         public:
             using pointer = decltype(std::declval<InnerIt>().operator->());
 
+            iterator_base(const DeLI &p, std::size_t outer, InnerIt it) : parent(p), outer_idx(outer), inner_it(it) {
+            }
+
             iterator_base(const DeLI &p, bool begin) : parent(p), outer_idx(begin ? 0 : parent.top_level.size() - 1),
                                                        inner_it(begin ? parent.top_level[0].rht.begin()
                                                                       : parent.top_level[
@@ -307,8 +320,14 @@ namespace DeLI {
                 }
             }
 
-            T operator*() const {
-                return utils::from_uint<T, inner_t>(parent.recombineResult(outer_idx, inner_t(*inner_it)));
+            T operator*() const { return key(); }
+
+            T key() const {
+                return utils::from_uint<T, inner_t>(parent.recombineResult(outer_idx, inner_t(inner_it.key())));
+            }
+
+            const typename RHT_t::payload_t &payload() const requires(has_payloads) {
+                return inner_it.payload();
             }
 
             pointer operator->() const { return inner_it.operator->(); }
