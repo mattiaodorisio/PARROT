@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <variant>
 #include <type_traits>
+#include <array>
+#include <utility>
 #include "bitvector.h"
 
 #include "utils.h"
@@ -46,6 +48,7 @@ namespace DeLI {
         using T = utils::uint_by_bits_t<value_bits + 1>; // we must be able to fit the extra empty_v value
         using Tvec = stdx::native_simd<T>;
         using payload_t = PayloadT;
+        class const_iterator;
         constexpr static size_t simd_width = utils::simd_bit_width<Tvec>();
         constexpr static bool has_payloads = has_payload;
 
@@ -73,11 +76,38 @@ namespace DeLI {
         };
 
         template<typename It>
+        using iter_entry_t = std::remove_cvref_t<decltype(*std::declval<const It &>())>;
+
+        template<typename It>
+        static constexpr bool iter_entry_has_key = requires(const iter_entry_t<It> &e) {
+            e.key();
+        };
+
+        template<typename It>
+        static constexpr bool iter_entry_has_payload = requires(const iter_entry_t<It> &e) {
+            e.payload();
+        };
+
+        template<typename It>
+        static constexpr bool iter_entry_has_first = requires(const iter_entry_t<It> &e) {
+            e.first;
+        };
+
+        template<typename It>
+        static constexpr bool iter_entry_has_second = requires(const iter_entry_t<It> &e) {
+            e.second;
+        };
+
+        template<typename It>
         static T iter_key(const It &it) {
             if constexpr (iter_has_key<It>) {
                 return it.key();
+            } else if constexpr (iter_entry_has_key<It>) {
+                return (*it).key();
             } else if constexpr (iter_has_first<It>) {
                 return static_cast<T>(it.first);
+            } else if constexpr (iter_entry_has_first<It>) {
+                return static_cast<T>((*it).first);
             } else {
                 return static_cast<T>(*it);
             }
@@ -87,8 +117,12 @@ namespace DeLI {
         static payload_t iter_payload(const It &it) requires(has_payload) {
             if constexpr (iter_has_payload<It>) {
                 return it.payload();
+            } else if constexpr (iter_entry_has_payload<It>) {
+                return (*it).payload();
             } else if constexpr (iter_has_second<It>) {
                 return it.second;
+            } else if constexpr (iter_entry_has_second<It>) {
+                return (*it).second;
             } else {
                 return payload_t{};
             }
@@ -97,7 +131,8 @@ namespace DeLI {
         // Static assertion: if has_payload, iterator must provide either payload() or .second
         template<typename It>
         static constexpr void validate_payload_iter() requires(has_payload) {
-            static_assert(iter_has_payload<It> || iter_has_second<It>,
+            static_assert(iter_has_payload<It> || iter_has_second<It> || iter_entry_has_payload<It> ||
+                          iter_entry_has_second<It>,
                 "When has_payload is true, iterator must provide either .payload() method or .second member (pair-like)");
         }
 
@@ -438,6 +473,10 @@ namespace DeLI {
                 return stdx::max(a, b);
             }
 
+            static auto better(auto a, auto b) {
+                return a > b;
+            }
+
             static auto horiz(auto a) {
                 return stdx::hmax(a);
             }
@@ -447,6 +486,10 @@ namespace DeLI {
         public:
             static auto vert(auto a, auto b) {
                 return stdx::min(a, b);
+            }
+
+            static auto better(auto a, auto b) {
+                return (a < b) | (a >= padding);
             }
 
             static auto horiz(auto a) {
@@ -507,13 +550,44 @@ namespace DeLI {
         std::tuple<T, bool>
         simd_probe_iter(sz_t &probe, const T key, const sz_t slot_mask) const requires(!use_simd) = delete;
 
+        // returns (combined, last)
+        template<int dir, typename op, int i>
+        auto simd_probe_rank_unrolled(sz_t &probe, const T key, const sz_t slot_mask) const requires(use_simd) {
+            auto v = read_aligned(probe);
+            probe = (probe + dir * Tvec::size()) & slot_mask;
+            auto keep = !op::better(v, key);
+            auto first = stdx::any_of(keep) ? stdx::find_first_set(keep) : -1;
+            sz_t vt = (first >= 0) ? static_cast<sz_t>(first) : Tvec::size();
+            if constexpr (i > 1) {
+                auto [comb, last] = simd_probe_rank_unrolled<dir, op, i - 1>(probe, key, slot_mask);
+                return std::make_pair(vt < Tvec::size() ? vt : Tvec::size() + comb, last);
+            } else {
+                return std::make_pair((first >= 0) ? static_cast<sz_t>(first) : Tvec::size(), v);
+            }
+        }
+
+        template<int dir, typename op, int i>
+        auto simd_probe_rank_unrolled(sz_t &probe, const T key, const sz_t slot_mask) const requires(!use_simd) = delete;
+
+        template<int dir, typename op>
+        std::tuple<sz_t, bool> simd_probe_rank_iter(sz_t &probe, const T key, const sz_t slot_mask) const requires(use_simd) {
+            auto [comb, last] = simd_probe_rank_unrolled<dir, op, simd_unrolled>(probe, key, slot_mask);
+            bool is_stop = op::stop(last[dir > 0 ? (Tvec::size() - 1) : 0], key);
+            return {comb, is_stop};
+        }
+
+        template<int dir, typename op>
+        std::tuple<sz_t, bool>
+        simd_probe_rank_iter(sz_t &probe, const T key, const sz_t slot_mask) const requires(!use_simd) = delete;
+        
+
         /**
         * Find successor
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
         */
-        std::optional<T> find_next(T key) const requires(!use_simd) {
+        const_iterator find_next_iter(T key) const requires(!use_simd) {
             if (empty()) {
-                return std::nullopt;
+                return end();
             }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
@@ -522,32 +596,46 @@ namespace DeLI {
                 if constexpr (use_slot_index) {
                     if (!isValue(table[probe])) {
                         std::optional<T> res = slot_bits.find_next(probe);
-                        return res.has_value() ? table[res.value()] : std::optional<T>{};
+                        return res.has_value() ? const_iterator(static_cast<sz_t>(res.value()), *this) : end();
                     }
                 }
                 probe = (probe + 1) & slot_mask;
                 if (probe == begin_slot)
-                    return std::nullopt;
+                    return end();
             }
-            return table[probe];
+            return const_iterator(probe, *this);
         }
 
-        std::optional<T> find_next(T key) const requires(use_simd) {
+        const_iterator find_next_iter(T key) const requires(use_simd) {
             if (empty()) {
-                return std::nullopt;
+                return end();
             }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
             sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
             while (true) {
-                auto [res, in_padding] = simd_probe_iter<1, simd_succ>(probe, key, slot_mask);
-                if (res >= key && isValue(res)) [[likely]] {
-                    return res;
+                const sz_t begin_slot = probe;
+                auto [res, in_padding] = simd_probe_rank_iter<1, simd_succ>(probe, key, slot_mask);
+                const sz_t candidate = (begin_slot + static_cast<sz_t>(res)) & slot_mask;
+
+                constexpr sz_t no_hit = simd_unrolled * Tvec::size();                
+                if (res != no_hit && table[candidate] >= key && isValue(table[candidate])) [[likely]] {
+                    return const_iterator(candidate, *this);
                 }
 
                 if (in_padding) [[unlikely]]
-                    return std::nullopt;
+                    return end();
             }
+        }
+
+        std::optional<T> find_next(T key) const requires(!use_simd) {
+            auto it = find_next_iter(key);
+            return it == end() ? std::nullopt : std::optional<T>(it.key());
+        }
+
+        std::optional<T> find_next(T key) const requires(use_simd) {
+            auto it = find_next_iter(key);
+            return it == end() ? std::nullopt : std::optional<T>(it.key());
         }
 
         /**
@@ -565,7 +653,7 @@ namespace DeLI {
             if (table[probe] >= key || !isValue(table[probe])) {
                 if constexpr (use_slot_index) {
                     // skip towards left
-                    std::optional<T> res;
+                    std::optional<sz_t> res;
                     if (probe <= begin_slot || !(res = slot_bits.find_prev(probe - 1)).has_value() ||
                         res.value() < begin_slot) {
                         return std::nullopt;

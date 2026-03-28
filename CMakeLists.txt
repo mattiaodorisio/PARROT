@@ -18,7 +18,6 @@ enable_testing()
 # Add subdirectories
 add_subdirectory(examples)
 add_subdirectory(tests)
-add_subdirectory(benchmarks)
 
 # Installation (for use as submodule)
 install(DIRECTORY include/ DESTINATION include)
