@@ -4,8 +4,10 @@ set(TEST_SOURCES
     test_init.cpp
     # test_veb.cpp
     test_rht.cpp
+    test_rht_payload.cpp
     test_conversion.cpp
     test_deli.cpp
+    test_deli_payload.cpp
     test_bitvector.cpp
 )
 

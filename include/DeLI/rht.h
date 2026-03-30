@@ -167,8 +167,9 @@ namespace DeLI {
                 opt == RhtOptimization::gap_fill_successor || opt == RhtOptimization::gap_fill_both;
         constexpr static bool use_slot_index = opt == RhtOptimization::slot_index;
 
-        std::conditional_t<dynamic, std::monostate, std::optional<T>> minV;
-        std::conditional_t<dynamic, std::monostate, std::optional<T>> maxV;
+        using static_minmax_cache_t = std::conditional_t<has_payload, std::optional<sz_t>, std::optional<T>>;
+        std::conditional_t<dynamic, std::monostate, static_minmax_cache_t> minV;
+        std::conditional_t<dynamic, std::monostate, static_minmax_cache_t> maxV;
 
         Tvec read_aligned(sz_t slot) const {
             return Tvec(&table[slot], stdx::vector_aligned);
@@ -235,16 +236,18 @@ namespace DeLI {
             It begin_copy = begin;
             sz_t slot_mask = table.size() - 1;
             sz_t next_slot = 0; // points to the next free slot
-            std::optional<T> first_seen = std::nullopt;
-            std::optional<T> last_seen = std::nullopt;
-
+            std::conditional_t<has_payload, std::optional<sz_t>, std::optional<T>> first_seen = std::nullopt;
+            std::conditional_t<has_payload, std::optional<sz_t>, std::optional<T>> last_seen = std::nullopt;
+            
             std::vector<bool> occupied_slots(table.size(), false);
             while (begin != end) {
                 T v = iter_key(begin) & value_mask;
-                if (!first_seen) {
-                    first_seen = v;
+                if constexpr (!has_payload) {
+                    if (!first_seen) {
+                        first_seen = v;
+                    }
+                    last_seen = v;
                 }
-                last_seen = v;
                 num_elements++;
                 sz_t slot = scale(v);
                 if (slot < next_slot) {
@@ -255,6 +258,10 @@ namespace DeLI {
                 table[slot] = v;
                 if constexpr (has_payload) {
                     payload_table[slot] = iter_payload(begin);
+                    if (!first_seen) {
+                        first_seen = slot;
+                    }
+                    last_seen = slot;
                 }
                 occupied_slots[slot] = true;
                 if constexpr (use_slot_index) {
@@ -292,6 +299,12 @@ namespace DeLI {
                 table[next_slot] = v;
                 if constexpr (has_payload) {
                     payload_table[next_slot] = iter_payload(begin);
+                    if constexpr (has_payload) {
+                        if (!first_seen) {
+                            first_seen = next_slot;
+                        }
+                        last_seen = next_slot;
+                    }
                 }
                 ++next_slot;
                 begin++;
@@ -639,12 +652,71 @@ namespace DeLI {
         }
 
         /**
-        * Find predecesor
-        * returns the first element STRICTLY LESS than the given key
+        * Return iterator to minimum element in hash table
         */
-        std::optional<T> find_prev(T key) const requires(!use_simd) {
+        const_iterator min_iter() const {
+            if constexpr (!dynamic) {
+                if constexpr (has_payload) {
+                    return minV ? const_iterator(minV.value(), *this) : end();
+                } else {
+                    return minV ? find_next_iter(minV.value()) : end();
+                }
+            }
+            return find_next_iter(0);
+        }
+
+        /**
+        * Return iterator to maximum element in hash table
+        */
+        const_iterator max_iter() const requires(!dynamic) {
+            if constexpr (has_payload) {
+                return maxV ? const_iterator(maxV.value(), *this) : end();
+            } else {
+                return maxV ? find_next_iter(maxV.value()) : end();
+            }
+        }
+
+        const_iterator max_iter() const requires(!use_simd && dynamic) {
             if (empty()) {
-                return std::nullopt;
+                return end();
+            }
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = (begin_slot - 1) & slot_mask;
+            while (!isValue(table[probe])) {
+                probe = (probe - 1) & slot_mask;
+            }
+            return const_iterator(probe, *this);
+        }
+
+        const_iterator max_iter() const requires(use_simd && dynamic) {
+            if (empty()) {
+                return end();
+            }
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = ((begin_slot - padding_length) & slot_mask) & simd_align_mask;
+            T highest_value = static_cast<T>(0);
+            sz_t highest_probe = slot_mask + 1;  // invalid
+            while (true) {
+                auto [res, in_padding] = simd_probe_iter<-1, simd_pred>(probe, value_mask + 1, slot_mask);
+                if (isValue(res)) [[likely]] {
+                    highest_value = res;
+                    highest_probe = probe - in_padding;
+                    break;
+                }
+            }
+            if (highest_probe > slot_mask) {
+                return end();
+            }
+            return const_iterator(highest_probe, *this);
+        }
+
+        /**
+        * Find predecesor iterator
+        * returns iterator to the first element STRICTLY LESS than the given key
+        */
+        const_iterator find_prev_iter(T key) const requires(!use_simd) {
+            if (empty()) {
+                return end();
             }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
@@ -656,17 +728,17 @@ namespace DeLI {
                     std::optional<sz_t> res;
                     if (probe <= begin_slot || !(res = slot_bits.find_prev(probe - 1)).has_value() ||
                         res.value() < begin_slot) {
-                        return std::nullopt;
+                        return end();
                     }
-                    return table[res.value()];
+                    return const_iterator(res.value(), *this);
                 } else {
                     // probe towards left
                     do {
                         if (probe == begin_slot)
-                            return std::nullopt;
+                            return end();
                         probe = (probe - 1) & slot_mask;
                     } while (table[probe] >= key);
-                    return table[probe];
+                    return const_iterator(probe, *this);
                 }
             } else {
                 // cluster, probe towards right
@@ -679,13 +751,22 @@ namespace DeLI {
                     }
                     probe = next;
                 }
-                return table[probe];
+                return const_iterator(probe, *this);
             }
         }
 
-        std::optional<T> find_prev(T key) const requires(use_simd) {
+        /**
+        * Find predecesor
+        * returns the first element STRICTLY LESS than the given key
+        */
+        std::optional<T> find_prev(T key) const requires(!use_simd) {
+            auto it = find_prev_iter(key);
+            return it == end() ? std::nullopt : std::optional<T>(it.key());
+        }
+
+        const_iterator find_prev_iter(T key) const requires(use_simd) {
             if (empty()) {
-                return std::nullopt;
+                return end();
             }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
@@ -696,22 +777,27 @@ namespace DeLI {
                 while (true) {
                     auto [res, in_padding] = simd_probe_iter<-1, simd_pred>(probe, key, slot_mask);
                     if (res < key && isValue(res)) [[likely]] {
-                        return res;
+                        return const_iterator(static_cast<sz_t>(res), *this);
                     }
                     if (in_padding) [[unlikely]]
-                        return std::nullopt;
+                        return end();
                 }
             } else {
-                std::optional<T> highest_pred = std::nullopt;
+                const_iterator highest_pred_iter = end();
                 while (true) {
                     auto [res, in_padding] = simd_probe_iter<1, simd_pred>(probe, key, slot_mask);
                     if (res < key && isValue(res)) [[likely]] {
-                        highest_pred = res;
+                        highest_pred_iter = const_iterator(static_cast<sz_t>(res), *this);
                     }
                     if (in_padding) [[unlikely]]
-                        return highest_pred;
+                        return highest_pred_iter;
                 }
             }
+        }
+
+        std::optional<T> find_prev(T key) const requires(use_simd) {
+            auto it = find_prev_iter(key);
+            return it == end() ? std::nullopt : std::optional<T>(it.key());
         }
 
         bool contains(T key) const requires(!use_simd) {
@@ -747,13 +833,21 @@ namespace DeLI {
 
         std::optional<T> min() const {
             if constexpr (!dynamic) {
-                return minV;
+                if constexpr (has_payload) {
+                    return minV ? std::optional<T>(table[minV.value()]) : std::nullopt;
+                } else {
+                    return minV;
+                }
             }
             return find_next(0);
         }
 
         std::optional<T> max() const requires(!dynamic) {
-            return maxV;
+            if constexpr (has_payload) {
+                return maxV ? std::optional<T>(table[maxV.value()]) : std::nullopt;
+            } else {
+                return maxV;
+            }
         }
 
         std::optional<T> max() const requires(!use_simd && dynamic) {

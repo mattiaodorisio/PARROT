@@ -268,36 +268,54 @@ namespace DeLI {
         }
 
         /**
+        * Find predecesor iterator
+        * returns iterator to the first element STRICTLY LESS than the given key
+        */
+        auto find_prev_iter(T key_) const {
+            inner_t key = utils::to_uint<T, inner_t>(key_);
+            inner_t high = getBucket(key);
+
+            auto inner_it = top_level[high].rht.find_prev_iter(key);
+            if (inner_it != top_level[high].rht.end()) {
+                return iterator_base<inner_const_iterator>(*this, high, inner_it);
+            }
+
+            if constexpr (prec_pred_succ) {
+                std::optional<inner_t> pred_key = top_level[high].predecessor;
+                if (pred_key) {
+                    high = getBucket(pred_key.value());
+                    return iterator_base<inner_const_iterator>(*this, high, top_level[high].rht.max_iter());
+                }
+            } else if constexpr (use_bucket_index) {
+                if (high > 0) {
+                    std::optional<inner_t> prev_bucket = bucket_bits.find_prev(high - 1);
+                    if (prev_bucket) {
+                        high = prev_bucket.value();
+                        auto it = top_level[high].rht.max_iter();
+                        if (it != top_level[high].rht.end()) {
+                            return iterator_base<inner_const_iterator>(*this, high, it);
+                        }
+                    }
+                }
+            } else {
+                while (high-- > 0) {
+                    auto it = top_level[high].rht.max_iter();
+                    if (it != top_level[high].rht.end()) {
+                        return iterator_base<inner_const_iterator>(*this, high, it);
+                    }
+                }
+            }
+
+            return end();
+        }
+
+        /**
         * Find predecesor
         * returns the first element STRICTLY LESS than the given key
         */
         std::optional<T> find_prev(T key_) const {
-            inner_t key = utils::to_uint<T, inner_t>(key_);
-            inner_t high = getBucket(key);
-
-            std::optional<inner_t> res = top_level[high].rht.find_prev(key);
-
-            if constexpr (prec_pred_succ) {
-                if (!res) {
-                    res = top_level[high].predecessor;
-                    return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
-                }
-            } else if constexpr (use_bucket_index) {
-                if (!res && high > 0) {
-                    std::optional<inner_t> next_bucket = bucket_bits.find_prev(high - 1);
-                    if (next_bucket) {
-                        res = top_level[next_bucket.value()].rht.max();
-                        high = next_bucket.value();
-                    }
-                }
-            } else {
-                while (!res && high-- > 0) {
-                    res = top_level[high].rht.max();
-                }
-            }
-
-            return res ? std::optional<T>(utils::from_uint<T, inner_t>(recombineResult(high, res.value())))
-                       : std::nullopt;
+            auto it = find_prev_iter(key_);
+            return it == end() ? std::nullopt : std::optional<T>(it.key());
         }
 
 
