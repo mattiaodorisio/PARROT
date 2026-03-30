@@ -29,6 +29,7 @@ void hash_args(std::size_t& seed, Args&&... args) {
 template<typename Index, bool allow_pred_equality, unsigned int bits, bool has_payload, typename... Args>
 void runForN(const int N, Args &&... args) {
     using T = uint_by_bits_t<bits>;
+    using P = uint64_t;
 
     if constexpr (bits < 64) {
         if (N > (size_t(1) << bits)) {
@@ -50,7 +51,7 @@ void runForN(const int N, Args &&... args) {
      // deterministic seed for reproducibility
     std::uniform_int_distribution<T> dist;
 
-    std::conditional_t<has_payload, std::map<T, T>, std::set<T>> model;
+    std::conditional_t<has_payload, std::map<T, P>, std::set<T>> model;
 
     auto model_key = [](const auto& entry) -> T {
         if constexpr (has_payload) {
@@ -60,7 +61,7 @@ void runForN(const int N, Args &&... args) {
         }
     };
 
-    auto check_payload_for_key = [&](T key, T expected_payload) {
+    auto check_payload_for_key = [&](T key, P expected_payload) {
         if constexpr (has_payload && requires(T t) { v.find_next_iter(t); v.end(); }) {
             auto it = v.find_next_iter(key);
             check(it != v.end());
@@ -70,11 +71,11 @@ void runForN(const int N, Args &&... args) {
     };
 
 
-    std::vector<std::conditional_t<has_payload, std::pair<T, T>, T>> bulk_values;
+    std::vector<std::conditional_t<has_payload, std::pair<T, P>, T>> bulk_values;
     while (model.size() < N) {
         T x = dist(rng) & (safe_shl(T(1), bits) - 1);
         if constexpr (has_payload) {
-            T payload = dist(rng);
+            P payload = dist(rng);
             if (model.emplace(x, payload).second) {
                 bulk_values.emplace_back(x, payload);
             }
@@ -116,7 +117,7 @@ void runForN(const int N, Args &&... args) {
         while (model.size() < N) {
             T x = dist(rng) & (safe_shl(T(1), bits) - 1);
             if constexpr (has_payload) {
-                T payload = dist(rng);
+                P payload = dist(rng);
                 if (model.emplace(x, payload).second) {
                     v.insert(x, payload);
                 }

@@ -566,6 +566,7 @@ namespace DeLI {
         // returns (combined, last)
         template<int dir, typename op, int i>
         auto simd_probe_rank_unrolled(sz_t &probe, const T key, const sz_t slot_mask) const requires(use_simd) {
+            // TODO: this doesn't work work for dir < 1
             auto v = read_aligned(probe);
             probe = (probe + dir * Tvec::size()) & slot_mask;
             auto keep = !op::better(v, key);
@@ -639,16 +640,6 @@ namespace DeLI {
                 if (in_padding) [[unlikely]]
                     return end();
             }
-        }
-
-        std::optional<T> find_next(T key) const requires(!use_simd) {
-            auto it = find_next_iter(key);
-            return it == end() ? std::nullopt : std::optional<T>(it.key());
-        }
-
-        std::optional<T> find_next(T key) const requires(use_simd) {
-            auto it = find_next_iter(key);
-            return it == end() ? std::nullopt : std::optional<T>(it.key());
         }
 
         /**
@@ -759,14 +750,137 @@ namespace DeLI {
         * Find predecesor
         * returns the first element STRICTLY LESS than the given key
         */
-        std::optional<T> find_prev(T key) const requires(!use_simd) {
-            auto it = find_prev_iter(key);
-            return it == end() ? std::nullopt : std::optional<T>(it.key());
-        }
-
         const_iterator find_prev_iter(T key) const requires(use_simd) {
+            // TODO: this doesn't work
             if (empty()) {
                 return end();
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key));
+            bool probe_left = table[probe] >= key || !isValue(table[probe]);
+            probe = probe & simd_align_mask;
+            constexpr sz_t no_hit = simd_unrolled * Tvec::size();                
+
+            if (probe_left) {
+                while (true) {
+                    const sz_t begin_slot = probe;
+                    auto [res, in_padding] = simd_probe_rank_iter<-1, simd_pred>(probe, key, slot_mask);
+                    const sz_t candidate = (begin_slot - static_cast<sz_t>(res)) & slot_mask;
+
+                    if (res != no_hit && table[candidate] < key && isValue(table[candidate])) [[likely]] {
+                        return const_iterator(static_cast<sz_t>(candidate), *this);
+                    }
+                    if (in_padding) [[unlikely]]
+                        return end();
+                }
+            } else {
+                const_iterator highest_pred_iter = end();
+                while (true) {
+                    const sz_t begin_slot = probe;
+                    auto [res, in_padding] = simd_probe_rank_iter<1, simd_pred>(probe, key, slot_mask);
+                    const sz_t candidate = (begin_slot + static_cast<sz_t>(res)) & slot_mask;
+
+                    if (res != no_hit && table[candidate] < key && isValue(table[candidate])) [[likely]] {
+                        highest_pred_iter = const_iterator(static_cast<sz_t>(candidate), *this);
+                    }
+                    if (in_padding) [[unlikely]]
+                        return highest_pred_iter;
+                }
+            }
+        }
+
+        /**
+        * Find successor
+        * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
+        */
+        std::optional<T> find_next(T key) const requires(!use_simd) {
+            if (empty()) {
+                return std::nullopt;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key));
+            while (!isValue(table[probe]) || table[probe] < key) {
+                if constexpr (use_slot_index) {
+                    if (!isValue(table[probe])) {
+                        std::optional<T> res = slot_bits.find_next(probe);
+                        return res.has_value() ? table[res.value()] : std::optional<T>{};
+                    }
+                }
+                probe = (probe + 1) & slot_mask;
+                if (probe == begin_slot)
+                    return std::nullopt;
+            }
+            return table[probe];
+        }
+
+        std::optional<T> find_next(T key) const requires(use_simd) {
+            if (empty()) {
+                return std::nullopt;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key)) & simd_align_mask;
+            while (true) {
+                auto [res, in_padding] = simd_probe_iter<1, simd_succ>(probe, key, slot_mask);
+                if (res >= key && isValue(res)) [[likely]] {
+                    return res;
+                }
+
+                if (in_padding) [[unlikely]]
+                    return std::nullopt;
+            }
+        }
+
+        /**
+        * Find predecesor
+        * returns the first element STRICTLY LESS than the given key
+        */
+        std::optional<T> find_prev(T key) const requires(!use_simd) {
+            if (empty()) {
+                return std::nullopt;
+            }
+            key = key & value_mask;
+            sz_t slot_mask = table.size() - 1;
+            sz_t probe = std::max(begin_slot, scale(key));
+
+            if (table[probe] >= key || !isValue(table[probe])) {
+                if constexpr (use_slot_index) {
+                    // skip towards left
+                    std::optional<T> res;
+                    if (probe <= begin_slot || !(res = slot_bits.find_prev(probe - 1)).has_value() ||
+                        res.value() < begin_slot) {
+                        return std::nullopt;
+                    }
+                    return table[res.value()];
+                } else {
+                    // probe towards left
+                    do {
+                        if (probe == begin_slot)
+                            return std::nullopt;
+                        probe = (probe - 1) & slot_mask;
+                    } while (table[probe] >= key);
+                    return table[probe];
+                }
+            } else {
+                // cluster, probe towards right
+                while (true) {
+                    auto next = (probe + 1) & slot_mask;
+                    if (table[next] >= key ||
+                        !isValue(table[next]) ||
+                        next == begin_slot) {
+                        break;
+                    }
+                    probe = next;
+                }
+                return table[probe];
+            }
+        }
+
+        std::optional<T> find_prev(T key) const requires(use_simd) {
+            if (empty()) {
+                return std::nullopt;
             }
             key = key & value_mask;
             sz_t slot_mask = table.size() - 1;
@@ -777,27 +891,22 @@ namespace DeLI {
                 while (true) {
                     auto [res, in_padding] = simd_probe_iter<-1, simd_pred>(probe, key, slot_mask);
                     if (res < key && isValue(res)) [[likely]] {
-                        return const_iterator(static_cast<sz_t>(res), *this);
+                        return res;
                     }
                     if (in_padding) [[unlikely]]
-                        return end();
+                        return std::nullopt;
                 }
             } else {
-                const_iterator highest_pred_iter = end();
+                std::optional<T> highest_pred = std::nullopt;
                 while (true) {
                     auto [res, in_padding] = simd_probe_iter<1, simd_pred>(probe, key, slot_mask);
                     if (res < key && isValue(res)) [[likely]] {
-                        highest_pred_iter = const_iterator(static_cast<sz_t>(res), *this);
+                        highest_pred = res;
                     }
                     if (in_padding) [[unlikely]]
-                        return highest_pred_iter;
+                        return highest_pred;
                 }
             }
-        }
-
-        std::optional<T> find_prev(T key) const requires(use_simd) {
-            auto it = find_prev_iter(key);
-            return it == end() ? std::nullopt : std::optional<T>(it.key());
         }
 
         bool contains(T key) const requires(!use_simd) {

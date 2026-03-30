@@ -262,11 +262,6 @@ namespace DeLI {
             return end();
         }
 
-        std::optional<T> find_next(T key_) const {
-            auto it = find_next_iter(key_);
-            return it == end() ? std::nullopt : std::optional<T>(it.key());
-        }
-
         /**
         * Find predecesor iterator
         * returns iterator to the first element STRICTLY LESS than the given key
@@ -310,12 +305,68 @@ namespace DeLI {
         }
 
         /**
+        * Find successor
+        * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
+        */
+        std::optional<T> find_next(T key_) const {
+            inner_t key = utils::to_uint<T, inner_t>(key_);
+            inner_t high = getBucket(key);
+            std::optional<inner_t> res = top_level[high].rht.find_next(key);
+
+            if constexpr (prec_pred_succ) {
+                if (!res) {
+                    res = top_level[high].successor;
+                    return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
+                }
+            } else if constexpr (use_bucket_index) {
+                if (!res && high + 1 < buckets) {
+                    std::optional<inner_t> next_bucket = bucket_bits.find_next(high + 1);
+                    if (next_bucket) {
+                        res = top_level[next_bucket.value()].rht.min();
+                        high = next_bucket.value();
+                    }
+                }
+            } else {
+                while (!res && ++high < buckets) {
+                    res = top_level[high].rht.min();
+                }
+            }
+
+            return res ? std::optional<T>(utils::from_uint<T, inner_t>(recombineResult(high, res.value())))
+                       : std::nullopt;
+        }
+
+        /**
         * Find predecesor
         * returns the first element STRICTLY LESS than the given key
         */
         std::optional<T> find_prev(T key_) const {
-            auto it = find_prev_iter(key_);
-            return it == end() ? std::nullopt : std::optional<T>(it.key());
+            inner_t key = utils::to_uint<T, inner_t>(key_);
+            inner_t high = getBucket(key);
+
+            std::optional<inner_t> res = top_level[high].rht.find_prev(key);
+
+            if constexpr (prec_pred_succ) {
+                if (!res) {
+                    res = top_level[high].predecessor;
+                    return res ? std::optional<T>(utils::from_uint<T, inner_t>(res.value())) : std::nullopt;
+                }
+            } else if constexpr (use_bucket_index) {
+                if (!res && high > 0) {
+                    std::optional<inner_t> next_bucket = bucket_bits.find_prev(high - 1);
+                    if (next_bucket) {
+                        res = top_level[next_bucket.value()].rht.max();
+                        high = next_bucket.value();
+                    }
+                }
+            } else {
+                while (!res && high-- > 0) {
+                    res = top_level[high].rht.max();
+                }
+            }
+
+            return res ? std::optional<T>(utils::from_uint<T, inner_t>(recombineResult(high, res.value())))
+                       : std::nullopt;
         }
 
 
