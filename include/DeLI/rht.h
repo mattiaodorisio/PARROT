@@ -210,14 +210,23 @@ namespace DeLI {
             sz_t slot_mask = table.size() - 1;
             sz_t slot = succ ? begin_slot : (begin_slot - 1);
             T last_highest = std::numeric_limits<T>::max();
+            [[maybe_unused]] sz_t last_payload_slot = 0;
             while (true) {
                 slot = (succ ? (slot - 1) : (slot + 1)) & slot_mask;
                 if (occupied_slots[slot]) {
-                    if (table[slot] != padding)
+                    if (table[slot] != padding) {
                         last_highest = table[slot];
+                        if constexpr (has_payload) {
+                            last_payload_slot = slot;
+                        }
+                    }
                 } else {
-                    if (!alternating || slot % 2 == succ)
+                    if (!alternating || slot % 2 == succ) {
                         table[slot] = last_highest;
+                        if constexpr (has_payload) {
+                            payload_table[slot] = payload_table[last_payload_slot];
+                        }
+                    }
                 }
                 if (!succ && ((slot + 1) & slot_mask) == begin_slot) break;
                 if (succ && slot == begin_slot) break;
