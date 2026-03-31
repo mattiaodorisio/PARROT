@@ -296,6 +296,7 @@ namespace DeLI {
             begin_slot = next_slot;
             // correct the elements at the beginning that are overwritten due to wrap around
             begin = begin_copy;
+            [[maybe_unused]] bool first_wrap = true;
             while (begin != end) {
                 T v = iter_key(begin) & value_mask;
                 if (scale(v) >= next_slot) {
@@ -308,11 +309,9 @@ namespace DeLI {
                 table[next_slot] = v;
                 if constexpr (has_payload) {
                     payload_table[next_slot] = iter_payload(begin);
-                    if constexpr (has_payload) {
-                        if (!first_seen) {
-                            first_seen = next_slot;
-                        }
-                        last_seen = next_slot;
+                    if (first_wrap) { // wrap: the min is now at next_slot
+                        first_seen = next_slot;
+                        first_wrap = false;
                     }
                 }
                 ++next_slot;
