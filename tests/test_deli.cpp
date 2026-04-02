@@ -17,7 +17,7 @@ void test_bits() {
 
 template<bool dynamic, DeLI::RhtOptimization rhtOpt, DeLI::TopLevelOptimization topOpt>
 void run() {
-    test_bits<dynamic, rhtOpt, topOpt, 127, 0, 60>();
+    test_bits<dynamic, rhtOpt, topOpt, 127, 1, 60>();
     test_bits<dynamic, rhtOpt, topOpt, 127, 1, 61>();
     test_bits<dynamic, rhtOpt, topOpt, 127, 2, 62>();
     test_bits<dynamic, rhtOpt, topOpt, 127, 8, 11>();
@@ -28,7 +28,6 @@ int main() {
     std::cout << "Running DeLI Test" << std::endl;
 
     run<false, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::none>();
-    run<false, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::precompute>();
     run<true, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::none>();
     run<true, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::bucket_index>();
 

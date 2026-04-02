@@ -62,10 +62,10 @@ void bench_query(Index &index, std::vector<uint64_t> &keys, std::vector<uint64_t
 
 int main(int argc, char **argv) {
     constexpr size_t NUM_QUERIES = 1 << 20;
-    constexpr size_t bits = 10;
+    constexpr size_t bits = 63;
     constexpr uint64_t mask = (uint64_t(1)<<bits)-1;
     // Generate a vector of keys
-    for (uint64_t log_keys = 7; log_keys < 24; ++log_keys) {
+    for (uint64_t log_keys = 11; log_keys < 24; ++log_keys) {
         std::cout<<log_keys<<" ";
         uint64_t NUM_KEYS = uint64_t(1)<<log_keys;
         std::vector<uint64_t > keys(NUM_KEYS), queries(NUM_QUERIES);

@@ -45,3 +45,7 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/DeLIConfigVersion.cmake"
     DESTINATION lib/cmake/DeLI
 )
+
+
+add_executable(bench_tiny benchmarks/bench_tiny.cpp)
+target_link_libraries(bench_tiny PRIVATE DeLI)

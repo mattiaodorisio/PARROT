@@ -642,7 +642,7 @@ namespace DeLI {
 
                 constexpr sz_t no_hit = simd_unrolled * Tvec::size();                
                 if (res != no_hit && table[candidate] >= key && isValue(table[candidate])) [[likely]] {
-                    return const_iterator(candidate, *this);
+                    return const_iterator(candidate, this);
                 }
 
                 if (in_padding) [[unlikely]]
@@ -1008,19 +1008,19 @@ namespace DeLI {
         private:
             friend class RHT;
 
-            sz_t index;
-            const RHT &rht;
+            sz_t index{};
+            const RHT *rht;
 
-            const_iterator(sz_t index, const RHT &rht_ref) : index(index), rht(rht_ref) {}
+            const_iterator(sz_t index, const RHT *rht_ref) : index(index), rht(rht_ref) {}
 
-            const_iterator(bool begin, const RHT &rht_ref) : rht(rht_ref) {
-                if (!begin || rht.empty()) {
+            const_iterator(bool begin, const RHT *rht_ref) : rht(rht_ref) {
+                if (!begin || rht->empty()) {
                     index = sz_t(-1);
                 } else {
-                    index = rht.begin_slot;
-                    while (!rht.isValue(rht.table[index])) {
+                    index = rht->begin_slot;
+                    while (!rht->isValue(rht->table[index])) {
                         index++;
-                        if (index == rht.table.size()) {
+                        if (index == rht->table.size()) {
                             index = sz_t(-1);
                             break;
                         }
@@ -1029,6 +1029,8 @@ namespace DeLI {
             }
 
         public:
+            const_iterator() = default;
+
             const_iterator(const const_iterator &other) : index(other.index), rht(other.rht) {}
 
             const_iterator(const_iterator &&other) noexcept: index(other.index), rht(other.rht) {}
@@ -1051,12 +1053,12 @@ namespace DeLI {
                 assert(index != sz_t(-1));
                 T prev = operator*();
                 while (true) {
-                    index = (index + 1) & (rht.table.size() - 1);
-                    if (index == rht.begin_slot) {
+                    index = (index + 1) & (rht->table.size() - 1);
+                    if (index == rht->begin_slot) {
                         index = sz_t(-1);
                         return *this;
                     }
-                    if (rht.isValue(rht.table[index]) && rht.table[index] > prev) {
+                    if (rht->isValue(rht->table[index]) && rht->table[index] > prev) {
                         return *this;
                     }
                 };
@@ -1073,32 +1075,34 @@ namespace DeLI {
             }
 
             const T *operator->() const {
-                return &rht.table[index];
+                return &rht->table[index];
             }
 
             T key() const {
-                return rht.table[index];
+                return rht->table[index];
             }
 
             const payload_t &payload() const requires(has_payload) {
-                return rht.payload_table[index];
+                return rht->payload_table[index];
             }
 
-            sz_t slot_index() const {
+            [[nodiscard]] sz_t slot_index() const {
                 return index;
             }
 
-            bool operator==(const const_iterator &other) const { return index == other.index; }
+            bool operator==(const const_iterator &other) const {
+                return index == other.index;
+            }
 
             bool operator!=(const const_iterator &other) const { return index != other.index; }
         };
 
         const_iterator begin() const {
-            return const_iterator(true, *this);
+            return const_iterator(true, this);
         }
 
         const_iterator end() const {
-            return const_iterator(false, *this);
+            return const_iterator(false, this);
         }
 
         const_iterator cbegin() const { return begin(); }
