@@ -61,7 +61,7 @@ void bench_query(Index &index, std::vector<uint64_t> &keys, std::vector<uint64_t
 }
 
 int main(int argc, char **argv) {
-    constexpr size_t NUM_QUERIES = 1 << 20;
+    constexpr size_t NUM_QUERIES = 1 << 24;
     constexpr size_t bits = 63;
     constexpr uint64_t mask = (uint64_t(1)<<bits)-1;
     // Generate a vector of keys
