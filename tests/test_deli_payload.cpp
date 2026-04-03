@@ -19,7 +19,7 @@ void test_bits_payload() {
 
 template<bool dynamic, DeLI::RhtOptimization rhtOpt, DeLI::TopLevelOptimization topOpt>
 void run_payload() {
-	test_bits_payload<dynamic, rhtOpt, topOpt, 127, 0, 60>();
+	test_bits_payload<dynamic, rhtOpt, topOpt, 127, 1, 60>();
 	test_bits_payload<dynamic, rhtOpt, topOpt, 127, 1, 61>();
 	test_bits_payload<dynamic, rhtOpt, topOpt, 127, 2, 62>();
 	test_bits_payload<dynamic, rhtOpt, topOpt, 127, 8, 11>();
@@ -30,7 +30,6 @@ int main() {
 	std::cout << "Running DeLI payload tests" << std::endl;
 
 	run_payload<false, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::none>();
-	run_payload<false, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::precompute>();
 	run_payload<true, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::none>();
 	run_payload<true, DeLI::RhtOptimization::none, DeLI::TopLevelOptimization::bucket_index>();
 

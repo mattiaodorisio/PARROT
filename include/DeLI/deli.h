@@ -193,8 +193,10 @@ namespace DeLI {
             auto high = getBucket(key);
             auto it = top_level.find(high);
             if (it != top_level.end()) {
-                return iterator_base<inner_const_iterator>(*this, high, it->second.find_next_iter(key),
-                                                           it->second.end());
+                auto inner_it = it->second.find_next_iter(key);
+                if (inner_it != it->second.end()) {
+                    return iterator_base<inner_const_iterator>(*this, high, inner_it, it->second.end());
+                }
             }
 
             if constexpr (use_bucket_index) {
@@ -206,10 +208,10 @@ namespace DeLI {
                     }
                 }
             } else {
-                while (++high < buckets) {
-                    it = top_level.find(high);
+                for (size_t h = size_t(high) + 1; h < buckets; ++h) {
+                    it = top_level.find(top_t(h));
                     if (it != top_level.end()) {
-                        return iterator_base<inner_const_iterator>(*this, high, it->second.begin(), it->second.end());
+                        return iterator_base<inner_const_iterator>(*this, h, it->second.begin(), it->second.end());
                     }
                 }
             }
@@ -226,7 +228,10 @@ namespace DeLI {
             auto high = getBucket(key);
             auto it = top_level.find(high);
             if (it != top_level.end()) {
-                return iterator_base<inner_const_iterator>(*this, high, it->find_prev_iter(key), it->second.end());
+                auto inner_it = it->second.find_prev_iter(key);
+                if (inner_it != it->second.end()) {
+                    return iterator_base<inner_const_iterator>(*this, high, inner_it, it->second.end());
+                }
             }
 
             if constexpr (use_bucket_index) {
@@ -272,10 +277,11 @@ namespace DeLI {
                     }
                 }
             } else {
-                while (!res && high++ < buckets - 1) {
-                    bucket = top_level.find(high);
+                for (size_t h = size_t(high) + 1; !res && h < buckets; ++h) {
+                    bucket = top_level.find(top_t(h));
                     if (bucket != top_level.end()) {
                         res = bucket->second.min();
+                        high = top_t(h);
                     }
                 }
             }

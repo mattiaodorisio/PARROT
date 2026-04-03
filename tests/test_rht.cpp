@@ -32,6 +32,8 @@ int main() {
 
     dispatch<0>();
     dispatch<1>();
+    dispatch<2>();
+    dispatch<4>();
     dispatch<5>();
 
     std::cout << "Test RHT passed!" << std::endl;

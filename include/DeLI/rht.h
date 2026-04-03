@@ -285,7 +285,10 @@ namespace DeLI {
             }
             if constexpr (use_simd) {
                 if (!table.empty()) {
-                    for (sz_t i = 0; i < padding_length; ++i) {
+                    sz_t actual_padding = std::min(padding_length, table.size() - num_elements);
+                    // Why the min: when next_slot <= table.size(), next_slot = 0
+                    // We need to prevent to overwrite valid elements at the beginning of the table
+                    for (sz_t i = 0; i < actual_padding; ++i) {
                         sz_t slot = (next_slot++) & slot_mask;
                         occupied_slots[slot] = true;
                         table[slot] = padding;
@@ -297,6 +300,7 @@ namespace DeLI {
             // correct the elements at the beginning that are overwritten due to wrap around
             begin = begin_copy;
             [[maybe_unused]] bool first_wrap = true;
+            [[maybe_unused]] auto saved_last_seen = last_seen;
             while (begin != end) {
                 T v = iter_key(begin) & value_mask;
                 if (scale(v) >= next_slot) {
@@ -313,9 +317,17 @@ namespace DeLI {
                         first_seen = next_slot;
                         first_wrap = false;
                     }
+                    last_seen = next_slot; // track the new slot of each re-placed element
                 }
                 ++next_slot;
                 begin++;
+            }
+            if constexpr (!dynamic && has_payload) {
+                if (begin != end) {
+                    // The max element was NOT re-placed (loop broke)
+                    // its original slot is still valid.
+                    last_seen = saved_last_seen;
+                }
             }
             if (!table.empty()) {
                 if constexpr (gap_fill_s) {
@@ -495,7 +507,7 @@ namespace DeLI {
             }
 
             static auto better(auto a, auto b) {
-                return a > b;
+                return a >= b;
             }
 
             static auto horiz(auto a) {
@@ -574,17 +586,35 @@ namespace DeLI {
         // returns (combined, last)
         template<int dir, typename op, int i>
         auto simd_probe_rank_unrolled(sz_t &probe, const T key, const sz_t slot_mask) const requires(use_simd) {
-            // TODO: this doesn't work work for dir < 1
             auto v = read_aligned(probe);
             probe = (probe + dir * Tvec::size()) & slot_mask;
             auto keep = !op::better(v, key);
-            auto first = stdx::any_of(keep) ? stdx::find_first_set(keep) : -1;
+
+            int first;
+            if constexpr (dir > 0) {
+                first = stdx::any_of(keep) ? stdx::find_first_set(keep) : -1;
+
+                if constexpr (std::is_same_v<op, simd_pred>) {
+                    first = stdx::any_of(keep) ? stdx::find_last_set(keep) : -1;
+                }
+            } else {
+                first = stdx::any_of(keep) ? (int)(Tvec::size() - 1) - (int)stdx::find_last_set(keep) : -1;
+            }
             sz_t vt = (first >= 0) ? static_cast<sz_t>(first) : Tvec::size();
             if constexpr (i > 1) {
                 auto [comb, last] = simd_probe_rank_unrolled<dir, op, i - 1>(probe, key, slot_mask);
+                if constexpr (dir > 0 && std::is_same_v<op, simd_pred>) {
+                    // The no-hit sentinel for the (i-1)-block sub-call is (i-1) * Tvec::size()
+                    constexpr sz_t sub_no_hit = (i - 1) * Tvec::size();
+                    if (comb == sub_no_hit && vt == Tvec::size()) {
+                        // TODO: remove this branch
+                        return std::make_pair(Tvec::size() * i, last);
+                    }
+                    return std::make_pair(comb >= sub_no_hit ? vt : Tvec::size() + comb, last);
+                }
                 return std::make_pair(vt < Tvec::size() ? vt : Tvec::size() + comb, last);
             } else {
-                return std::make_pair((first >= 0) ? static_cast<sz_t>(first) : Tvec::size(), v);
+                return std::make_pair(vt, v);
             }
         }
 
@@ -618,14 +648,14 @@ namespace DeLI {
                 if constexpr (use_slot_index) {
                     if (!isValue(table[probe])) {
                         std::optional<T> res = slot_bits.find_next(probe);
-                        return res.has_value() ? const_iterator(static_cast<sz_t>(res.value()), *this) : end();
+                        return res.has_value() ? const_iterator(static_cast<sz_t>(res.value()), this) : end();
                     }
                 }
                 probe = (probe + 1) & slot_mask;
                 if (probe == begin_slot)
                     return end();
             }
-            return const_iterator(probe, *this);
+            return const_iterator(probe, this);
         }
 
         const_iterator find_next_iter(T key) const requires(use_simd) {
@@ -656,7 +686,7 @@ namespace DeLI {
         const_iterator min_iter() const {
             if constexpr (!dynamic) {
                 if constexpr (has_payload) {
-                    return minV ? const_iterator(minV.value(), *this) : end();
+                    return minV ? const_iterator(minV.value(), this) : end();
                 } else {
                     return minV ? find_next_iter(minV.value()) : end();
                 }
@@ -669,7 +699,7 @@ namespace DeLI {
         */
         const_iterator max_iter() const requires(!dynamic) {
             if constexpr (has_payload) {
-                return maxV ? const_iterator(maxV.value(), *this) : end();
+                return maxV ? const_iterator(maxV.value(), this) : end();
             } else {
                 return maxV ? find_next_iter(maxV.value()) : end();
             }
@@ -684,7 +714,7 @@ namespace DeLI {
             while (!isValue(table[probe])) {
                 probe = (probe - 1) & slot_mask;
             }
-            return const_iterator(probe, *this);
+            return const_iterator(probe, this);
         }
 
         const_iterator max_iter() const requires(use_simd && dynamic) {
@@ -693,20 +723,20 @@ namespace DeLI {
             }
             sz_t slot_mask = table.size() - 1;
             sz_t probe = ((begin_slot - padding_length) & slot_mask) & simd_align_mask;
-            T highest_value = static_cast<T>(0);
-            sz_t highest_probe = slot_mask + 1;  // invalid
+            constexpr static sz_t no_hit = simd_unrolled * Tvec::size();
+            constexpr auto max_key = value_mask + 1;
+            
             while (true) {
-                auto [res, in_padding] = simd_probe_iter<-1, simd_pred>(probe, value_mask + 1, slot_mask);
-                if (isValue(res)) [[likely]] {
-                    highest_value = res;
-                    highest_probe = probe - in_padding;
-                    break;
+                const sz_t init_slot = probe;
+                auto [res, in_padding] = simd_probe_rank_iter<-1, simd_pred>(probe, max_key, slot_mask);
+                const sz_t candidate = (init_slot + Tvec::size() - 1 - static_cast<sz_t>(res)) & slot_mask;
+
+                if (res != no_hit && table[candidate] < max_key && isValue(table[candidate])) [[likely]] {
+                    return const_iterator(static_cast<sz_t>(candidate), this);
                 }
+                if (in_padding) [[unlikely]]
+                    return end();
             }
-            if (highest_probe > slot_mask) {
-                return end();
-            }
-            return const_iterator(highest_probe, *this);
         }
 
         /**
@@ -729,7 +759,7 @@ namespace DeLI {
                         res.value() < begin_slot) {
                         return end();
                     }
-                    return const_iterator(res.value(), *this);
+                    return const_iterator(res.value(), this);
                 } else {
                     // probe towards left
                     do {
@@ -737,7 +767,7 @@ namespace DeLI {
                             return end();
                         probe = (probe - 1) & slot_mask;
                     } while (table[probe] >= key);
-                    return const_iterator(probe, *this);
+                    return const_iterator(probe, this);
                 }
             } else {
                 // cluster, probe towards right
@@ -750,16 +780,15 @@ namespace DeLI {
                     }
                     probe = next;
                 }
-                return const_iterator(probe, *this);
+                return const_iterator(probe, this);
             }
         }
 
         /**
-        * Find predecesor
-        * returns the first element STRICTLY LESS than the given key
+        * Find predecesor iterator
+        * returns iterator to the first element STRICTLY LESS than the given key
         */
         const_iterator find_prev_iter(T key) const requires(use_simd) {
-            // TODO: this doesn't work
             if (empty()) {
                 return end();
             }
@@ -768,16 +797,16 @@ namespace DeLI {
             sz_t probe = std::max(begin_slot, scale(key));
             bool probe_left = table[probe] >= key || !isValue(table[probe]);
             probe = probe & simd_align_mask;
-            constexpr sz_t no_hit = simd_unrolled * Tvec::size();                
+            constexpr sz_t no_hit = simd_unrolled * Tvec::size();
 
             if (probe_left) {
                 while (true) {
                     const sz_t begin_slot = probe;
                     auto [res, in_padding] = simd_probe_rank_iter<-1, simd_pred>(probe, key, slot_mask);
-                    const sz_t candidate = (begin_slot - static_cast<sz_t>(res)) & slot_mask;
+                    const sz_t candidate = (begin_slot + Tvec::size() - 1 - static_cast<sz_t>(res)) & slot_mask;
 
                     if (res != no_hit && table[candidate] < key && isValue(table[candidate])) [[likely]] {
-                        return const_iterator(static_cast<sz_t>(candidate), *this);
+                        return const_iterator(static_cast<sz_t>(candidate), this);
                     }
                     if (in_padding) [[unlikely]]
                         return end();
@@ -790,7 +819,7 @@ namespace DeLI {
                     const sz_t candidate = (begin_slot + static_cast<sz_t>(res)) & slot_mask;
 
                     if (res != no_hit && table[candidate] < key && isValue(table[candidate])) [[likely]] {
-                        highest_pred_iter = const_iterator(static_cast<sz_t>(candidate), *this);
+                        highest_pred_iter = const_iterator(static_cast<sz_t>(candidate), this);
                     }
                     if (in_padding) [[unlikely]]
                         return highest_pred_iter;
