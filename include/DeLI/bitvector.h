@@ -16,9 +16,8 @@ namespace DeLI {
         static constexpr unsigned WORD_BITS = sizeof(word_t) * 8;
 
         // Construct with capacity bits (will allocate enough words).
-        explicit TwoLevelBitvector(size_t capacity_bits = 0)
+        explicit TwoLevelBitvector()
             : min_val_(0), max_val_(0), lcp_(0), is_empty_(true) {
-            resize(capacity_bits);
         }
 
         // Resize to at least capacity_bits (bits). Existing bits are preserved when increasing.
@@ -203,7 +202,7 @@ namespace DeLI {
         size_t top_words() const { return top_.size(); }
 
         void clear() {
-            TwoLevelBitvector replace(data_words() * WORD_BITS);
+            TwoLevelBitvector replace;
             std::swap(*this, replace);
         }
 
@@ -213,6 +212,14 @@ namespace DeLI {
                 insert(*begin);
                 begin++;
             }
+        }
+
+        [[nodiscard]] size_t min() const {
+            return min_val_;
+        }
+
+        [[nodiscard]] size_t max() const {
+            return max_val_ + 1;
         }
 
     private:

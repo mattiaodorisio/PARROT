@@ -38,14 +38,22 @@ namespace DeLI {
             return utils::safe_shl(high, low_bits) | low;
         }
 
+        template<size_t max_v>
         struct Stub {
-            Stub(size_t) {
+            Stub() = default;
+
+            [[nodiscard]] size_t min() const {
+                return 0;
+            }
+
+            [[nodiscard]] size_t max() const {
+                return max_v;
             }
         };
 
         using RHT_t = RHT<dynamic, low_bits, rht_opt, rht_simd_unrolled, rht_max_load_perc, PayloadT>;
         top_structure<top_t, RHT_t> top_level;
-        std::conditional_t<use_bucket_index, TwoLevelBitvector, Stub> bucket_bits;
+        std::conditional_t<use_bucket_index, TwoLevelBitvector, Stub<buckets> > bucket_bits;
         constexpr static bool has_payloads = RHT_t::has_payloads;
 
         template<typename Entry>
@@ -82,9 +90,7 @@ namespace DeLI {
     public:
         constexpr static size_t rht_simd_width = RHT_t::simd_width;
 
-        DeLI() : bucket_bits(buckets) {
-            ;
-        }
+        DeLI() = default;
 
 
         template<typename It>
@@ -200,7 +206,7 @@ namespace DeLI {
             }
 
             if constexpr (use_bucket_index) {
-                if (high < buckets - 1) {
+                if (high < bucket_bits.max() - 1) {
                     if (std::optional<inner_t> next_bucket = bucket_bits.find_next(high + 1)) {
                         high = next_bucket.value();
                         it = top_level.find(high);
@@ -235,18 +241,20 @@ namespace DeLI {
             }
 
             if constexpr (use_bucket_index) {
-                if (high > 0) {
+                if (high > bucket_bits.min()) {
                     if (std::optional<inner_t> prev_bucket = bucket_bits.find_prev(high - 1)) {
                         high = prev_bucket.value();
                         it = top_level.find(high);
-                        return iterator_base<inner_const_iterator>(*this, high, it->second.max_iter(), it->second.end());
+                        return iterator_base<
+                            inner_const_iterator>(*this, high, it->second.max_iter(), it->second.end());
                     }
                 }
             } else {
                 while (high-- > 0) {
                     it = top_level.find(high);
                     if (it != top_level.end()) {
-                        return iterator_base<inner_const_iterator>(*this, high, it->second.max_iter(), it->second.end());
+                        return iterator_base<
+                            inner_const_iterator>(*this, high, it->second.max_iter(), it->second.end());
                     }
                 }
             }
@@ -269,7 +277,7 @@ namespace DeLI {
             }
 
             if constexpr (use_bucket_index) {
-                if (!res && high < buckets - 1) {
+                if (!res && high < bucket_bits.max() - 1) {
                     std::optional<inner_t> next_bucket = bucket_bits.find_next(high + 1);
                     if (next_bucket) {
                         res = top_level.find(next_bucket.value())->second.min();
@@ -312,7 +320,7 @@ namespace DeLI {
             }
 
             if constexpr (use_bucket_index) {
-                if (!res && high > 0) {
+                if (!res && high > bucket_bits.min()) {
                     std::optional<inner_t> next_bucket = bucket_bits.find_prev(high - 1);
                     if (next_bucket) {
                         res = top_level.find(next_bucket.value())->second.max();
@@ -345,8 +353,9 @@ namespace DeLI {
                 inner_it(it), inner_it_end(it_end) {
             }
 
-            iterator_base(const DeLI &p, bool begin) : parent(p), outer_idx(begin ? 0 : buckets) {
+            iterator_base(const DeLI &p, bool begin) : parent(p) {
                 if (begin) {
+                    outer_idx = p.bucket_bits.min();
                     // find the first non-empty bucket
                     if constexpr (use_bucket_index) {
                         if (std::optional<inner_t> first_bucket = parent.bucket_bits.find_next(0)) {
@@ -371,7 +380,8 @@ namespace DeLI {
                             ++outer_idx;
                         }
                     }
-
+                } else {
+                    outer_idx = buckets;
                 }
             }
 
@@ -394,7 +404,7 @@ namespace DeLI {
                     if (inner_it == inner_it_end) {
                         ++outer_idx;
                         if constexpr (use_bucket_index) {
-                            if (outer_idx < buckets) {
+                            if (outer_idx < parent.bucket_bits.max()) {
                                 std::optional<inner_t> first_bucket = parent.bucket_bits.find_next(outer_idx);
                                 if (first_bucket.has_value()) {
                                     outer_idx = first_bucket.value();
@@ -405,6 +415,8 @@ namespace DeLI {
                                 } else {
                                     outer_idx = buckets;
                                 }
+                            } else {
+                                outer_idx = buckets;
                             }
                         } else {
                             while (outer_idx < buckets) {

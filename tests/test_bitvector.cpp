@@ -8,7 +8,7 @@ int main() {
 
   using Index = DeLI::TwoLevelBitvector;
   constexpr int bits = 20;
-  test_index<Index, bits, true>(1<<bits);
+  test_index<Index, bits, true>();
 
   std::cout << "Test bitvector passed!" << std::endl;
   return 0;
