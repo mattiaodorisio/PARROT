@@ -16,7 +16,8 @@ namespace DeLI {
         static constexpr unsigned WORD_BITS = sizeof(word_t) * 8;
 
         // Construct with capacity bits (will allocate enough words).
-        explicit TwoLevelBitvector(size_t capacity_bits = 0) {
+        explicit TwoLevelBitvector(size_t capacity_bits = 0)
+            : min_val_(0), max_val_(0), lcp_(0), is_empty_(true) {
             resize(capacity_bits);
         }
 
@@ -32,8 +33,55 @@ namespace DeLI {
             top_.resize(needed_top_words, 0);
         }
 
-        // set bit at pos (0-based)
+        // set bit at pos (0-based), with LCP-based coordinate transformation
         void insert(size_t pos) {
+            if (is_empty_) {
+                min_val_ = pos;
+                max_val_ = pos;
+                is_empty_ = false;
+                lcp_ = 0;
+                // Allocate initial space
+                resize(64);
+                insert_internal(0);
+                return;
+            }
+
+            // Check if we need to update min/max and potentially recompute LCP
+            size_t old_min_val = min_val_;
+            bool updated = false;
+            if (pos < min_val_) {
+                min_val_ = pos;
+                updated = true;
+            }
+            if (pos > max_val_) {
+                max_val_ = pos;
+                updated = true;
+            }
+
+            // Recompute LCP if min or max changed
+            if (updated) {
+                unsigned new_lcp = compute_lcp(min_val_, max_val_);
+                if (new_lcp != lcp_) {
+                    unsigned old_lcp = lcp_;
+                    lcp_ = new_lcp;
+                    // When LCP changes, need to rebuild with new coordinate transformation
+                    rebuild_with_new_lcp(old_lcp, old_min_val);
+                }
+            }
+
+            // Transform position and insert
+            size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            insert_internal(transformed_pos);
+        }
+
+        // Internal insert without transformation
+        void insert_internal(size_t pos) {
+            // Ensure we have enough capacity
+            size_t needed_bits = pos + 1;
+            if (needed_bits > data_words() * WORD_BITS) {
+                resize(needed_bits);
+            }
+
             assert(pos < data_words() * WORD_BITS);
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
@@ -43,9 +91,24 @@ namespace DeLI {
                 set_top_bit(widx);
         }
 
-        // clear bit at pos
+        // clear bit at pos, with LCP-based coordinate transformation
         void remove(size_t pos) {
-            assert(pos < data_words() * WORD_BITS);
+            if (is_empty_) return;
+
+            // Transform position
+            size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            remove_internal(transformed_pos);
+
+            // If we removed min or max, find the new ones
+            if (pos == min_val_ || pos == max_val_) {
+                update_min_max();
+            }
+        }
+
+        // Internal remove without transformation
+        void remove_internal(size_t pos) {
+            if (pos >= data_words() * WORD_BITS) return;
+
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
             data_[widx] &= ~(word_t(1) << b);
@@ -53,17 +116,187 @@ namespace DeLI {
                 clear_top_bit(widx);
         }
 
-        // test bit at pos
+        // Update min and max after a deletion, using find_prev and find_next
+        void update_min_max() {
+            // Find the minimum set bit
+            auto min_opt = find_next_internal(0);
+            if (!min_opt) {
+                // Data structure is now empty
+                is_empty_ = true;
+                min_val_ = 0;
+                max_val_ = 0;
+                lcp_ = 0;
+                return;
+            }
+
+            // Find the maximum set bit
+            auto max_opt = find_prev_internal(data_words() * WORD_BITS - 1);
+
+            size_t old_lcp = lcp_;
+            size_t old_min_val = min_val_;
+            min_val_ = *min_opt + (old_min_val >> lcp_) * (1ULL << lcp_);
+            max_val_ = *max_opt + (old_min_val >> lcp_) * (1ULL << lcp_);
+
+            // Recompute LCP
+            unsigned new_lcp = compute_lcp(min_val_, max_val_);
+            if (new_lcp != old_lcp) {
+                lcp_ = new_lcp;
+                rebuild_with_new_lcp(old_lcp, old_min_val);
+            }
+        }
+
+        // test bit at pos, with LCP-based coordinate transformation
         bool contains(size_t pos) const {
-            assert(pos < data_words() * WORD_BITS);
+            if (is_empty_) return false;
+            size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            return contains_internal(transformed_pos);
+        }
+
+        // Internal contains without transformation
+        bool contains_internal(size_t pos) const {
+            if (pos >= data_words() * WORD_BITS) return false;
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
             return (data_[widx] >> b) & 1ULL;
         }
 
-        // predecessor: greatest set bit <= pos. returns std::nullopt if none.
+        // predecessor: greatest set bit <= pos (with LCP-based coordinate transformation). returns std::nullopt if none.
         std::optional<size_t> find_prev(size_t pos) const {
-            assert(pos < data_words() * WORD_BITS);
+            if (is_empty_) return std::nullopt;
+
+            // If pos < min_val, there's no predecessor
+            if (pos < min_val_) return std::nullopt;
+
+            // If pos >= max_val, the predecessor is at most max_val, so search from max_val
+            size_t search_pos = (pos >= max_val_) ? max_val_ : pos;
+
+            size_t transformed_pos = search_pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            auto result = find_prev_internal(transformed_pos);
+            if (result) {
+                return *result + (min_val_ >> lcp_) * (1ULL << lcp_);
+            }
+            return std::nullopt;
+        }
+
+        // successor: smallest set bit >= pos (with LCP-based coordinate transformation). returns std::nullopt if none.
+        std::optional<size_t> find_next(size_t pos) const {
+            if (is_empty_) return std::nullopt;
+
+            // If pos > max_val, there's no successor
+            if (pos > max_val_) return std::nullopt;
+
+            // If pos <= min_val, the successor is at least min_val, so search from min_val
+            size_t search_pos = (pos <= min_val_) ? min_val_ : pos;
+
+            size_t transformed_pos = search_pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            auto result = find_next_internal(transformed_pos);
+            if (result) {
+                return *result + (min_val_ >> lcp_) * (1ULL << lcp_);
+            }
+            return std::nullopt;
+        }
+
+        // number of words holding data
+        size_t data_words() const { return data_.size(); }
+
+        // number of top words
+        size_t top_words() const { return top_.size(); }
+
+        void clear() {
+            TwoLevelBitvector replace(data_words() * WORD_BITS);
+            std::swap(*this, replace);
+        }
+
+        template<typename It>
+        void bulk_load(It begin, It end) {
+            while (begin != end) {
+                insert(*begin);
+                begin++;
+            }
+        }
+
+    private:
+        std::vector<word_t> data_; // data words storing actual bits
+        std::vector<word_t> top_;  // top-level words: each bit corresponds to whether a data_ word is non-zero
+        size_t min_val_, max_val_; // track min and max values inserted
+        unsigned lcp_;             // longest common prefix of min and max (at bit level)
+        bool is_empty_;            // whether the data structure is empty
+
+        // Compute the longest common prefix length (in bits) of min and max
+        static unsigned compute_lcp(size_t min_v, size_t max_v) {
+            if (min_v == max_v) return 63; // All bits are common
+            size_t xor_val = min_v ^ max_v;
+            return 63 - msb_index(xor_val); // Position of first differing bit from the left
+        }
+
+        // Rebuild the data structure when LCP changes
+        void rebuild_with_new_lcp(unsigned old_lcp, size_t old_min_val) {
+            // Save all currently set bits with their original positions
+            std::vector<size_t> positions;
+            for (size_t i = 0; i < data_words(); ++i) {
+                word_t w = data_[i];
+                while (w) {
+                    unsigned lsb = lsb_index(w);
+                    size_t bit_pos = (i << 6) + lsb;
+                    // Recover original position from transformed position using old lcp and old min_val
+                    positions.push_back(bit_pos + (old_min_val >> old_lcp) * (1ULL << old_lcp));
+                    w &= w - 1; // clear the least significant bit
+                }
+            }
+
+            // Clear the data structure
+            data_.clear();
+            top_.clear();
+            resize(64); // Start with minimal size
+
+            // Re-insert all positions with the new transformation
+            for (size_t pos : positions) {
+                size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+                insert_internal(transformed_pos);
+            }
+        }
+
+        // Find next set bit in the transformed space (internal, without LCP transformation)
+        std::optional<size_t> find_next_internal(size_t pos) const {
+            if (pos >= data_words() * WORD_BITS) return std::nullopt;
+            size_t widx = pos >> 6;
+            unsigned b = pos & 63;
+
+            // mask bits >= b in same word
+            word_t w = data_[widx] & ~((word_t(1) << b) - 1ULL);
+            if (w) [[likely]] {
+                unsigned lsb = lsb_index(w);
+                return (widx << 6) + lsb;
+            }
+
+            // find next non-empty data-word by checking top level bits > widx
+            size_t top_bit_idx = widx + 1;
+            size_t top_word_idx = top_bit_idx >> 6;
+            unsigned in_word_bit = top_bit_idx & 63;
+
+            // mask top word bits >= in_word_bit
+            if (top_word_idx < top_words()) {
+                word_t topw = top_[top_word_idx] & (~((in_word_bit == 0) ? 0ULL : ((word_t(1) << in_word_bit) - 1ULL)));
+                while (true) {
+                    if (topw) {
+                        unsigned top_lsb = lsb_index(topw);
+                        size_t nxt_data_widx = (top_word_idx << 6) + top_lsb;
+                        if (nxt_data_widx >= data_words()) return std::nullopt;
+                        word_t dw = data_[nxt_data_widx];
+                        unsigned lsb_dw = lsb_index(dw);
+                        return (nxt_data_widx << 6) + lsb_dw;
+                    }
+                    ++top_word_idx;
+                    if (top_word_idx >= top_words()) break;
+                    topw = top_[top_word_idx];
+                }
+            }
+            return std::nullopt;
+        }
+
+        // Find previous set bit in the transformed space (internal, without LCP transformation)
+        std::optional<size_t> find_prev_internal(size_t pos) const {
+            if (pos >= data_words() * WORD_BITS) return std::nullopt;
             size_t widx = pos >> 6;
             unsigned b = pos & 63;
 
@@ -101,66 +334,6 @@ namespace DeLI {
             return std::nullopt;
         }
 
-        // successor: smallest set bit >= pos. returns std::nullopt if none.
-        std::optional<size_t> find_next(size_t pos) const {
-            assert(pos < data_words() * WORD_BITS);
-            size_t widx = pos >> 6;
-            unsigned b = pos & 63;
-
-            // mask bits >= b in same word
-            word_t w = data_[widx] & ~((word_t(1) << b) - 1ULL);
-            if (w) [[likely]] {
-                unsigned lsb = lsb_index(w);
-                return (widx << 6) + lsb;
-            }
-
-            // find next non-empty data-word by checking top level bits > widx
-            size_t top_bit_idx = widx + 1;
-            size_t top_word_idx = top_bit_idx >> 6;
-            unsigned in_word_bit = top_bit_idx & 63;
-
-            // mask top word bits >= in_word_bit
-            if (top_word_idx < top_words()) {
-                word_t topw = top_[top_word_idx] & (~((in_word_bit == 0) ? 0ULL : ((word_t(1) << in_word_bit) - 1ULL)));
-                while (true) {
-                    if (topw) {
-                        unsigned top_lsb = lsb_index(topw);
-                        size_t nxt_data_widx = (top_word_idx << 6) + top_lsb;
-                        if (nxt_data_widx >= data_words()) return std::nullopt;
-                        word_t dw = data_[nxt_data_widx];
-                        unsigned lsb_dw = lsb_index(dw);
-                        return (nxt_data_widx << 6) + lsb_dw;
-                    }
-                    ++top_word_idx;
-                    if (top_word_idx >= top_words()) break;
-                    topw = top_[top_word_idx];
-                }
-            }
-            return std::nullopt;
-        }
-
-        // number of words holding data
-        size_t data_words() const { return data_.size(); }
-
-        // number of top words
-        size_t top_words() const { return top_.size(); }
-
-        void clear() {
-            TwoLevelBitvector replace(data_words() * WORD_BITS);
-            std::swap(*this, replace);
-        }
-
-        template<typename It>
-        void bulk_load(It begin, It end) {
-            while (begin != end) {
-                insert(*begin);
-                begin++;
-            }
-        }
-
-    private:
-        std::vector<word_t> data_; // data words storing actual bits
-        std::vector<word_t> top_;  // top-level words: each bit corresponds to whether a data_ word is non-zero
 
 
         // set/clear top bit for given data word index
