@@ -17,7 +17,7 @@ namespace DeLI {
 
         // Construct with capacity bits (will allocate enough words).
         explicit TwoLevelBitvector()
-            : min_val_(0), max_val_(0), lcp_(0), is_empty_(true) {
+            : min_val_(0), max_val_(0), is_empty_(true) {
         }
 
         // Resize to at least capacity_bits (bits). Existing bits are preserved when increasing.
@@ -32,44 +32,30 @@ namespace DeLI {
             top_.resize(needed_top_words, 0);
         }
 
-        // set bit at pos (0-based), with LCP-based coordinate transformation
+        // set bit at pos (0-based), with min-based coordinate transformation
         void insert(size_t pos) {
             if (is_empty_) {
                 min_val_ = pos;
                 max_val_ = pos;
                 is_empty_ = false;
-                lcp_ = 0;
                 // Allocate initial space
                 resize(64);
                 insert_internal(0);
                 return;
             }
 
-            // Check if we need to update min/max and potentially recompute LCP
-            size_t old_min_val = min_val_;
-            bool updated = false;
             if (pos < min_val_) {
+                // Shift all existing bits up to make room for new minimum
+                size_t delta = min_val_ - pos;
+                shift_up(delta);
                 min_val_ = pos;
-                updated = true;
             }
             if (pos > max_val_) {
                 max_val_ = pos;
-                updated = true;
-            }
-
-            // Recompute LCP if min or max changed
-            if (updated) {
-                unsigned new_lcp = compute_lcp(min_val_, max_val_);
-                if (new_lcp != lcp_) {
-                    unsigned old_lcp = lcp_;
-                    lcp_ = new_lcp;
-                    // When LCP changes, need to rebuild with new coordinate transformation
-                    rebuild_with_new_lcp(old_lcp, old_min_val);
-                }
             }
 
             // Transform position and insert
-            size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            size_t transformed_pos = pos - min_val_;
             insert_internal(transformed_pos);
         }
 
@@ -90,12 +76,13 @@ namespace DeLI {
                 set_top_bit(widx);
         }
 
-        // clear bit at pos, with LCP-based coordinate transformation
+        // clear bit at pos, with min-based coordinate transformation
         void remove(size_t pos) {
             if (is_empty_) return;
+            if (pos < min_val_ || pos > max_val_) return;
 
             // Transform position
-            size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            size_t transformed_pos = pos - min_val_;
             remove_internal(transformed_pos);
 
             // If we removed min or max, find the new ones
@@ -124,30 +111,22 @@ namespace DeLI {
                 is_empty_ = true;
                 min_val_ = 0;
                 max_val_ = 0;
-                lcp_ = 0;
                 return;
             }
 
             // Find the maximum set bit
             auto max_opt = find_prev_internal(data_words() * WORD_BITS - 1);
 
-            size_t old_lcp = lcp_;
-            size_t old_min_val = min_val_;
-            min_val_ = *min_opt + (old_min_val >> lcp_) * (1ULL << lcp_);
-            max_val_ = *max_opt + (old_min_val >> lcp_) * (1ULL << lcp_);
-
-            // Recompute LCP
-            unsigned new_lcp = compute_lcp(min_val_, max_val_);
-            if (new_lcp != old_lcp) {
-                lcp_ = new_lcp;
-                rebuild_with_new_lcp(old_lcp, old_min_val);
-            }
+            size_t base = min_val_;
+            min_val_ = *min_opt + base;
+            max_val_ = *max_opt + base;
         }
 
-        // test bit at pos, with LCP-based coordinate transformation
+        // test bit at pos, with min-based coordinate transformation
         bool contains(size_t pos) const {
             if (is_empty_) return false;
-            size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            if (pos < min_val_ || pos > max_val_) return false;
+            size_t transformed_pos = pos - min_val_;
             return contains_internal(transformed_pos);
         }
 
@@ -159,7 +138,7 @@ namespace DeLI {
             return (data_[widx] >> b) & 1ULL;
         }
 
-        // predecessor: greatest set bit <= pos (with LCP-based coordinate transformation). returns std::nullopt if none.
+        // predecessor: greatest set bit <= pos (with min-based coordinate transformation). returns std::nullopt if none.
         std::optional<size_t> find_prev(size_t pos) const {
             if (is_empty_) return std::nullopt;
 
@@ -169,15 +148,15 @@ namespace DeLI {
             // If pos >= max_val, the predecessor is at most max_val, so search from max_val
             size_t search_pos = (pos >= max_val_) ? max_val_ : pos;
 
-            size_t transformed_pos = search_pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            size_t transformed_pos = search_pos - min_val_;
             auto result = find_prev_internal(transformed_pos);
             if (result) {
-                return *result + (min_val_ >> lcp_) * (1ULL << lcp_);
+                return *result + min_val_;
             }
             return std::nullopt;
         }
 
-        // successor: smallest set bit >= pos (with LCP-based coordinate transformation). returns std::nullopt if none.
+        // successor: smallest set bit >= pos (with min-based coordinate transformation). returns std::nullopt if none.
         std::optional<size_t> find_next(size_t pos) const {
             if (is_empty_) return std::nullopt;
 
@@ -187,10 +166,10 @@ namespace DeLI {
             // If pos <= min_val, the successor is at least min_val, so search from min_val
             size_t search_pos = (pos <= min_val_) ? min_val_ : pos;
 
-            size_t transformed_pos = search_pos - (min_val_ >> lcp_) * (1ULL << lcp_);
+            size_t transformed_pos = search_pos - min_val_;
             auto result = find_next_internal(transformed_pos);
             if (result) {
-                return *result + (min_val_ >> lcp_) * (1ULL << lcp_);
+                return *result + min_val_;
             }
             return std::nullopt;
         }
@@ -226,27 +205,16 @@ namespace DeLI {
         std::vector<word_t> data_; // data words storing actual bits
         std::vector<word_t> top_;  // top-level words: each bit corresponds to whether a data_ word is non-zero
         size_t min_val_, max_val_; // track min and max values inserted
-        unsigned lcp_;             // longest common prefix of min and max (at bit level)
         bool is_empty_;            // whether the data structure is empty
 
-        // Compute the longest common prefix length (in bits) of min and max
-        static unsigned compute_lcp(size_t min_v, size_t max_v) {
-            if (min_v == max_v) return 63; // All bits are common
-            size_t xor_val = min_v ^ max_v;
-            return 63 - msb_index(xor_val); // Position of first differing bit from the left
-        }
-
-        // Rebuild the data structure when LCP changes
-        void rebuild_with_new_lcp(unsigned old_lcp, size_t old_min_val) {
-            // Save all currently set bits with their original positions
+        // Shift all stored bits up by delta positions (used when min_val_ decreases).
+        void shift_up(size_t delta) {
             std::vector<size_t> positions;
             for (size_t i = 0; i < data_words(); ++i) {
                 word_t w = data_[i];
                 while (w) {
                     unsigned lsb = lsb_index(w);
-                    size_t bit_pos = (i << 6) + lsb;
-                    // Recover original position from transformed position using old lcp and old min_val
-                    positions.push_back(bit_pos + (old_min_val >> old_lcp) * (1ULL << old_lcp));
+                    positions.push_back((i << 6) + lsb);
                     w &= w - 1; // clear the least significant bit
                 }
             }
@@ -258,12 +226,11 @@ namespace DeLI {
 
             // Re-insert all positions with the new transformation
             for (size_t pos : positions) {
-                size_t transformed_pos = pos - (min_val_ >> lcp_) * (1ULL << lcp_);
-                insert_internal(transformed_pos);
+                insert_internal(pos + delta);
             }
         }
 
-        // Find next set bit in the transformed space (internal, without LCP transformation)
+        // Find next set bit in the transformed space (internal, without transformation)
         std::optional<size_t> find_next_internal(size_t pos) const {
             if (pos >= data_words() * WORD_BITS) return std::nullopt;
             size_t widx = pos >> 6;
@@ -301,7 +268,7 @@ namespace DeLI {
             return std::nullopt;
         }
 
-        // Find previous set bit in the transformed space (internal, without LCP transformation)
+        // Find previous set bit in the transformed space (internal, without offset transformation)
         std::optional<size_t> find_prev_internal(size_t pos) const {
             if (pos >= data_words() * WORD_BITS) return std::nullopt;
             size_t widx = pos >> 6;

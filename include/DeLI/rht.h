@@ -137,6 +137,7 @@ namespace DeLI {
         }
 
         struct Stub {
+            Stub() = default;
             Stub(size_t) {
             }
         };
@@ -350,8 +351,7 @@ namespace DeLI {
         template<typename It>
         RHT(It begin, It end, sz_t slots) : begin_slot(0), num_elements(0), table(slots, empty_v),
                                             payload_table(slots),
-                                            slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))),
-                                            slot_bits(slots) {
+                                            slot_shift(value_bits - static_cast<sz_t>(std::countr_zero(slots))) {
             insert_sorted(begin, end);
         }
 
@@ -368,7 +368,7 @@ namespace DeLI {
 
     public:
 
-        RHT() : table(0), payload_table(0), begin_slot(0), slot_shift(0), num_elements(0), slot_bits(0) {
+        RHT() : table(0), payload_table(0), begin_slot(0), slot_shift(0), num_elements(0) {
         }
 
         template<typename It>
