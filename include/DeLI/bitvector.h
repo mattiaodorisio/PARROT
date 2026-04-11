@@ -117,9 +117,9 @@ namespace DeLI {
             // Find the maximum set bit
             auto max_opt = find_prev_internal(data_words() * WORD_BITS - 1);
 
-            size_t base = min_val_;
-            min_val_ = *min_opt + base;
-            max_val_ = *max_opt + base;
+            // min_val_ is the coordinate base: it must NOT change here, only in insert()
+            // via shift_up(). Changing it here would invalidate all stored transformed positions.
+            max_val_ = *max_opt + min_val_;
         }
 
         // test bit at pos, with min-based coordinate transformation
