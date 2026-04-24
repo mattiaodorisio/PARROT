@@ -1,8 +1,8 @@
-# DeLI
+# PARROT
 
 ```bash
 git clone ...
-cd DeLI
+cd PARROT
 mkdir build && cd build
 cmake ..
 make
