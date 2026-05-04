@@ -201,6 +201,11 @@ namespace DeLI {
             return max_val_ + 1;
         }
 
+        // Heap bytes owned by this bitvector (excludes sizeof(*this) which is inline).
+        [[nodiscard]] size_t heap_bytes() const {
+            return (data_.size() + top_.size()) * sizeof(word_t);
+        }
+
     private:
         std::vector<word_t> data_; // data words storing actual bits
         std::vector<word_t> top_;  // top-level words: each bit corresponds to whether a data_ word is non-zero

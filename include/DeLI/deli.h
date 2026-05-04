@@ -190,6 +190,37 @@ namespace DeLI {
             return total_size;
         }
 
+        // Total memory in bytes: struct overhead + top-level map heap + each RHT's
+        // internal arrays + optional bucket_bits heap.
+        [[nodiscard]] size_t size_in_bytes() const {
+            size_t sz = sizeof(*this);
+
+            // The top-level map (unordered_dense or std::unordered_map) stores
+            // (top_t, RHT_t) pairs in a flat heap-allocated vector. If the map
+            // exposes values() (ankerl::unordered_dense), count the allocated
+            // capacity; otherwise fall back to counting only actually-occupied entries.
+            if constexpr (requires { top_level.values(); }) {
+                sz += top_level.values().capacity()
+                      * sizeof(typename decltype(top_level)::value_type);
+            } else {
+                sz += top_level.size()
+                      * sizeof(typename decltype(top_level)::value_type);
+            }
+
+            // Add each RHT's heap-allocated arrays (table + payload + slot_bits).
+            for (const auto &[k, rht] : top_level) {
+                sz += rht.size_in_bytes();
+            }
+
+            // bucket_bits is a TwoLevelBitvector when use_bucket_index; its
+            // inline struct is already in sizeof(*this), add only heap arrays.
+            if constexpr (use_bucket_index) {
+                sz += bucket_bits.heap_bytes();
+            }
+
+            return sz;
+        }
+
         /**
         * Find successor
         * Returns the first element NOT LESS than the given key (equivalent of std::lower_bound)
