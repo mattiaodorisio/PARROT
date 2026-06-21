@@ -206,15 +206,15 @@ namespace DeLI {
             }
         }
 
-        template<bool alternating, bool succ>
-        void fill_gaps(const std::vector<bool> &occupied_slots) {
+        template<bool succ>
+        void fill_gaps_dir() {
             sz_t slot_mask = table.size() - 1;
             sz_t slot = succ ? begin_slot : (begin_slot - 1);
             T last_highest = std::numeric_limits<T>::max();
             [[maybe_unused]] sz_t last_payload_slot = 0;
             while (true) {
                 slot = (succ ? (slot - 1) : (slot + 1)) & slot_mask;
-                if (occupied_slots[slot]) {
+                if (table[slot] != empty_v) {
                     if (table[slot] != padding) {
                         last_highest = table[slot];
                         if constexpr (has_payload) {
@@ -222,16 +222,71 @@ namespace DeLI {
                         }
                     }
                 } else {
-                    if (!alternating || slot % 2 == succ) {
-                        table[slot] = last_highest;
-                        if constexpr (has_payload) {
-                            payload_table[slot] = payload_table[last_payload_slot];
-                        }
+                    table[slot] = last_highest;
+                    if constexpr (has_payload) {
+                        payload_table[slot] = payload_table[last_payload_slot];
                     }
                 }
                 if (!succ && ((slot + 1) & slot_mask) == begin_slot) break;
                 if (succ && slot == begin_slot) break;
             };
+        }
+
+        // Fills slots [start, end) (cyclically), alternating between the
+        // predecessor and the successor. Either side may be unavailable
+        // (beginning and end).
+        void fill_segment(sz_t start, sz_t end, sz_t slot_mask,
+                           bool have_pred, T pred_value, [[maybe_unused]] sz_t pred_slot,
+                           bool have_succ, T succ_value, [[maybe_unused]] sz_t succ_slot) {
+            for (sz_t slot = start; slot != end; slot = (slot + 1) & slot_mask) {
+                if (slot % 2 == 1) {
+                    if (have_succ) {
+                        table[slot] = succ_value;
+                        if constexpr (has_payload) {
+                            payload_table[slot] = payload_table[succ_slot];
+                        }
+                    }
+                } else if (have_pred) {
+                    table[slot] = pred_value;
+                    if constexpr (has_payload) {
+                        payload_table[slot] = payload_table[pred_slot];
+                    }
+                }
+            }
+        }
+
+        void fill_gaps_both() {
+            sz_t slot_mask = table.size() - 1;
+            bool have_pred = false;
+            T pred_value{};
+            sz_t pred_slot = 0;
+            bool in_gap = false;
+            sz_t gap_start = 0;
+
+            sz_t slot = begin_slot;
+            for (sz_t i = 0; i < table.size(); ++i, slot = (slot + 1) & slot_mask) {
+                if (table[slot] == empty_v) {
+                    if (!in_gap) {
+                        gap_start = slot;
+                        in_gap = true;
+                    }
+                } else {
+                    bool is_real = table[slot] != padding;
+                    if (in_gap) {
+                        fill_segment(gap_start, slot, slot_mask, have_pred, pred_value, pred_slot, is_real,
+                                     table[slot], slot);
+                        in_gap = false;
+                    }
+                    if (is_real) {
+                        pred_value = table[slot];
+                        pred_slot = slot;
+                        have_pred = true;
+                    }
+                }
+            }
+            if (in_gap) {
+                fill_segment(gap_start, begin_slot, slot_mask, have_pred, pred_value, pred_slot, false, T{}, 0);
+            }
         }
 
         void clear_payload_slot(sz_t slot) {
@@ -248,8 +303,7 @@ namespace DeLI {
             sz_t next_slot = 0; // points to the next free slot
             std::conditional_t<has_payload, std::optional<sz_t>, std::optional<T>> first_seen = std::nullopt;
             std::conditional_t<has_payload, std::optional<sz_t>, std::optional<T>> last_seen = std::nullopt;
-            
-            std::vector<bool> occupied_slots(table.size(), false);
+
             while (begin != end) {
                 T v = iter_key(begin) & value_mask;
                 if constexpr (!has_payload) {
@@ -273,7 +327,6 @@ namespace DeLI {
                     }
                     last_seen = slot;
                 }
-                occupied_slots[slot] = true;
                 if constexpr (use_slot_index) {
                     slot_bits.insert(slot);
                 }
@@ -291,7 +344,6 @@ namespace DeLI {
                     // We need to prevent to overwrite valid elements at the beginning of the table
                     for (sz_t i = 0; i < actual_padding; ++i) {
                         sz_t slot = (next_slot++) & slot_mask;
-                        occupied_slots[slot] = true;
                         table[slot] = padding;
                         clear_payload_slot(slot);
                     }
@@ -307,7 +359,6 @@ namespace DeLI {
                 if (scale(v) >= next_slot) {
                     break;
                 }
-                occupied_slots[next_slot] = true;
                 if constexpr (use_slot_index) {
                     slot_bits.insert(next_slot);
                 }
@@ -330,13 +381,12 @@ namespace DeLI {
                     last_seen = saved_last_seen;
                 }
             }
-            if (!table.empty()) {
-                if constexpr (gap_fill_s) {
-                    fill_gaps<opt == RhtOptimization::gap_fill_both, true>(occupied_slots);
-                }
-                if constexpr (gap_fill_p) {
-                    fill_gaps<opt == RhtOptimization::gap_fill_both, false>(occupied_slots);
-                }
+            if constexpr (opt == RhtOptimization::gap_fill_both) {
+                if (!table.empty()) fill_gaps_both();
+            } else if constexpr (gap_fill_s) {
+                if (!table.empty()) fill_gaps_dir<true>();
+            } else if constexpr (gap_fill_p) {
+                if (!table.empty()) fill_gaps_dir<false>();
             }
             if constexpr (!dynamic) {
                 if (!empty()) {

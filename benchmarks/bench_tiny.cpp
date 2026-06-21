@@ -60,7 +60,49 @@ void bench_query(Index &index, std::vector<uint64_t> &keys, std::vector<uint64_t
     std::cout << static_cast<double>(elapsed_ns) / queries.size() << " " << sum << std::endl;
 }
 
+template<typename Index>
+double bench_construct(const std::vector<uint64_t> &sorted_keys, int reps) {
+    using clock = std::chrono::steady_clock;
+    uint64_t total_ns = 0;
+    for (int r = 0; r < reps; ++r) {
+        Index idx;
+        auto start = clock::now();
+        idx.bulk_load(sorted_keys.begin(), sorted_keys.end());
+        auto end = clock::now();
+        total_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    }
+    return static_cast<double>(total_ns) / reps;
+}
+
+void bench_gap_fill_construction() {
+    constexpr size_t bits = 24;
+    constexpr uint64_t mask = (uint64_t(1) << bits) - 1;
+    constexpr int reps = 200;
+
+    std::cout << "log_keys predecessor successor both" << std::endl;
+    for (uint64_t log_keys = 0; log_keys <= 16; ++log_keys) {
+        uint64_t NUM_KEYS = uint64_t(1) << log_keys;
+        std::vector<uint64_t> keys(NUM_KEYS);
+        for (size_t i = 0; i < NUM_KEYS; ++i) {
+            keys[i] = XXH64_avalanche(i) & mask;
+        }
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+
+        using Pred = DeLI::RHT<false, bits, DeLI::RhtOptimization::gap_fill_predecessor, 0, 50>;
+        using Succ = DeLI::RHT<false, bits, DeLI::RhtOptimization::gap_fill_successor, 0, 50>;
+        using Both = DeLI::RHT<false, bits, DeLI::RhtOptimization::gap_fill_both, 0, 50>;
+
+        double t_pred = bench_construct<Pred>(keys, reps);
+        double t_succ = bench_construct<Succ>(keys, reps);
+        double t_both = bench_construct<Both>(keys, reps);
+
+        std::cout << log_keys << " " << t_pred << " " << t_succ << " " << t_both << std::endl;
+    }
+}
+
 int main(int argc, char **argv) {
+    bench_gap_fill_construction();
     constexpr size_t NUM_QUERIES = 1 << 24;
     constexpr size_t bits = 63;
     constexpr uint64_t mask = (uint64_t(1)<<bits)-1;
