@@ -5,7 +5,7 @@
 #include <random>
 #include <chrono>
 
-#include "deli.h"
+#include "parrot.h"
 #include "veb.h"
 #include "rht.h"
 #define XXH_PRIME64_2  0xC2B2AE3D27D4EB4FULL  /*!< 0b1100001010110010101011100011110100100111110101001110101101001111 */
@@ -89,9 +89,9 @@ void bench_gap_fill_construction() {
         std::sort(keys.begin(), keys.end());
         keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
 
-        using Pred = DeLI::RHT<false, bits, DeLI::RhtOptimization::gap_fill_predecessor, 0, 50>;
-        using Succ = DeLI::RHT<false, bits, DeLI::RhtOptimization::gap_fill_successor, 0, 50>;
-        using Both = DeLI::RHT<false, bits, DeLI::RhtOptimization::gap_fill_both, 0, 50>;
+        using Pred = PARROT::RHT<false, bits, PARROT::RhtOptimization::gap_fill_predecessor, 0, 50>;
+        using Succ = PARROT::RHT<false, bits, PARROT::RhtOptimization::gap_fill_successor, 0, 50>;
+        using Both = PARROT::RHT<false, bits, PARROT::RhtOptimization::gap_fill_both, 0, 50>;
 
         double t_pred = bench_construct<Pred>(keys, reps);
         double t_succ = bench_construct<Succ>(keys, reps);
@@ -123,10 +123,10 @@ int main(int argc, char **argv) {
         std::copy(keys.begin(), keys.end(), std::back_inserter(sorted_keys));
         std::sort(sorted_keys.begin(), sorted_keys.end());
 
-        using Index = DeLI::RHT<true, bits, DeLI::RhtOptimization::none, 4, 50>;
-        //using Index = DeLI::DeLI<true, DeLI::RhtOptimization::none, 5, 50, DeLI::TopLevelOptimization::none, T , 16, bits >;
+        using Index = PARROT::RHT<true, bits, PARROT::RhtOptimization::none, 4, 50>;
+        //using Index = PARROT::PARROT<true, PARROT::RhtOptimization::none, 5, 50, PARROT::TopLevelOptimization::none, T , 16, bits >;
         Index rht_index;
-        //DeLI::utils::print_simd_info<Index::Tvec >();
+        //PARROT::utils::print_simd_info<Index::Tvec >();
 
         bench_query(rht_index, sorted_keys, queries);
     }

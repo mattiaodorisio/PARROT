@@ -6,8 +6,8 @@ set(TEST_SOURCES
     test_rht.cpp
     test_rht_payload.cpp
     test_conversion.cpp
-    test_deli.cpp
-    test_deli_payload.cpp
+    test_parrot.cpp
+    test_parrot_payload.cpp
     test_bitvector.cpp
 )
 
@@ -16,7 +16,7 @@ foreach(TEST_SOURCE IN LISTS TEST_SOURCES)
     
     # Create executable for each test
     add_executable(${TEST_NAME} ${TEST_SOURCE})
-    target_link_libraries(${TEST_NAME} DeLI)
+    target_link_libraries(${TEST_NAME} PARROT)
     
     # Add test to CTest
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})

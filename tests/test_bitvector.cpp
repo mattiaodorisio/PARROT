@@ -6,7 +6,7 @@
 int main() {
   std::cout << "Running bitvector Test" << std::endl;
 
-  using Index = DeLI::TwoLevelBitvector;
+  using Index = PARROT::TwoLevelBitvector;
   constexpr int bits = 20;
   test_index<Index, bits, true>();
 

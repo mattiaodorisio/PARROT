@@ -7,7 +7,7 @@
 #include "utils.h"
 #include "rht.h"
 
-namespace DeLI {
+namespace PARROT {
     enum class TopLevelOptimization {
         none,
         bucket_index
@@ -17,7 +17,7 @@ namespace DeLI {
         TopLevelOptimization opt, typename T, unsigned int high_bits, typename PayloadT = NoPayload,
         unsigned int value_bits = sizeof(T) * CHAR_BIT, template<typename k, typename v> typename top_structure =
         std::unordered_map>
-    class DeLI {
+    class PARROT {
         static_assert(value_bits < 128);
         static_assert(sizeof(T) * CHAR_BIT >= value_bits);
         static_assert(value_bits >= high_bits);
@@ -90,7 +90,7 @@ namespace DeLI {
     public:
         constexpr static size_t rht_simd_width = RHT_t::simd_width;
 
-        DeLI() = default;
+        PARROT() = default;
 
 
         template<typename It>
@@ -380,11 +380,11 @@ namespace DeLI {
         public:
             using pointer = decltype(std::declval<InnerIt>().operator->());
 
-            iterator_base(const DeLI &p, std::size_t outer, InnerIt it, InnerIt it_end) : parent(p), outer_idx(outer),
+            iterator_base(const PARROT &p, std::size_t outer, InnerIt it, InnerIt it_end) : parent(p), outer_idx(outer),
                 inner_it(it), inner_it_end(it_end) {
             }
 
-            iterator_base(const DeLI &p, bool begin) : parent(p) {
+            iterator_base(const PARROT &p, bool begin) : parent(p) {
                 if (begin) {
                     outer_idx = p.bucket_bits.min();
                     // find the first non-empty bucket
@@ -481,7 +481,7 @@ namespace DeLI {
             bool operator!=(const iterator_base &other) const { return !(*this == other); }
 
         private:
-            const DeLI &parent;
+            const PARROT &parent;
             std::size_t outer_idx;
             InnerIt inner_it;
             InnerIt inner_it_end;

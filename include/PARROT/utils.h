@@ -9,7 +9,7 @@
 #include <iostream>
 #include <vector>
 
-namespace DeLI::utils {
+namespace PARROT::utils {
 
   // credit http://stereopsis.com/radix.html
 
@@ -241,5 +241,5 @@ namespace DeLI::utils {
 
 
 
-} // namespace DeLI::utils
+} // namespace PARROT::utils
 

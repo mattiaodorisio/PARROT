@@ -27,7 +27,7 @@ void test() {
   
   // Convert to uint
   for (const auto& val : test_values) {
-    converted_values.push_back(DeLI::utils::to_uint<T1, T2>(val));
+    converted_values.push_back(PARROT::utils::to_uint<T1, T2>(val));
   }
   
   // Verify sorted order is preserved
@@ -35,7 +35,7 @@ void test() {
   
   // Convert back
   for (size_t i = 0; i < test_values.size(); ++i) {
-    check(test_values[i] == (DeLI::utils::from_uint<T1, T2>(converted_values[i])));
+    check(test_values[i] == (PARROT::utils::from_uint<T1, T2>(converted_values[i])));
   }
 }
 int main() {

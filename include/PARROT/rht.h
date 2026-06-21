@@ -18,7 +18,7 @@
 
 namespace stdx = std::experimental;
 
-namespace DeLI {
+namespace PARROT {
     struct NoPayload {
     };
 
@@ -1075,7 +1075,7 @@ namespace DeLI {
         // Heap bytes owned by this RHT (table + payload + slot_bits heap).
         // Excludes sizeof(*this) because RHT objects are stored inline inside the
         // top-level hash map's flat value vector; their inline footprint is counted
-        // as part of that vector's capacity in DeLI::size_in_bytes().
+        // as part of that vector's capacity in PARROT::size_in_bytes().
         size_t size_in_bytes() const {
             size_t sz = table.size() * sizeof(T);
             if constexpr (has_payload)

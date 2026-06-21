@@ -9,7 +9,7 @@
 #include <iostream>
 #include <cassert>
 
-namespace DeLI {
+namespace PARROT {
     class TwoLevelBitvector {
     public:
         using word_t = uint64_t;
