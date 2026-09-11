@@ -2,7 +2,7 @@
 
 **PAR**titioned **RO**bin Hood **T**able.
 
-PARROT is a learned predecessor data structure. It learns the distribution of the input keys to accelerate operations such as insert, delete, successor, and predecessor queries. Unlike other learned indexes, its simple two-level design, a top-level routing table and bottom-level Robin hash tables, allows PARROT to achieve expected constant-time operations under smoothed analysis.
+[PARROT](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESA.2026.15) is a learned predecessor data structure. It learns the distribution of the input keys to accelerate operations such as insert, delete, successor, and predecessor queries. Unlike other learned indexes, its simple two-level design, a top-level routing table and bottom-level Robin hash tables, allows PARROT to achieve expected constant-time operations under smoothed analysis.
 
 It partitions keys by their `b` most significant bits into buckets, each stored as a Robin Hood Table (RHT) with key-scaled positions. Under smoothed analysis, all operations run in expected constant time.
 
@@ -123,8 +123,6 @@ using MapIndex = PARROT::PARROT<
 
 The companion benchmark repository is at https://github.com/mattiaodorisio/PARROT-testbed.
 
-## Cite us
+## Paper
 
-```latex
-todo
-```
+For more details on PARROT, see the [paper](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESA.2026.15).
